@@ -1,0 +1,6 @@
+{
+  "server": "hibiscus01",
+  "port": 50000,
+
+  "benchmark-file": "resources/asd.txt"
+}
