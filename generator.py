@@ -22,7 +22,7 @@ class _TransactionGenerator(GenericSocketUser):
         """
         logging.debug(f"Sending INSERT to the transaction manager for transaction {transaction_id}.")
         logging.debug(f"Sending statement: {statement}")
-        self.send_message(OpCode.INSERT, [transaction_id, statement, hash_input])
+        self.send_message(OpCode.INSERT_FROM_CLIENT, [transaction_id, statement, hash_input])
 
         reply_message = self.read_message()
         logging.debug("Received from transaction manager: ", reply_message)
@@ -49,6 +49,7 @@ class _TransactionGenerator(GenericSocketUser):
 
     def __call__(self):
         logging.info(f"Connecting to TM at {self.kwargs['server']} through port {int(self.kwargs['port'])}.")
+        self.socket.connect((self.kwargs['server'], int(self.kwargs['port']), ))
 
         # Complete this portion-- note: we are doing hashing at the TM instead of the client now...
         filename = self.kwargs['benchmark-file']

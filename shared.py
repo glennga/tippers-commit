@@ -18,10 +18,15 @@ class OpCode(IntEnum):
     STOP = -1
     NO_OP = 0
 
+    # Between the coordinator and the client.
     START_TRANSACTION = 1
     ABORT_TRANSACTION = 2
     COMMIT_TRANSACTION = 3
-    INSERT = 4
+    INSERT_FROM_CLIENT = 4
+
+    # Between the coordinator and a participant.
+    INITIATE_PARTICIPANT = 5
+    INSERT_FROM_COORDINATOR = 6
 
     LOG = 1
     FLUSH_LOG = 2
