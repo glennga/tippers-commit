@@ -7,9 +7,9 @@ from shared import *
 
 
 class _TransactionGenerator(GenericSocketUser):
-    def __init__(self, **kwargs):
+    def __init__(self, **context):
         super().__init__()
-        self.kwargs = kwargs
+        self.context = context
 
     def _insert_statement(self, transaction_id: bytes, statement: str, hash_input: list) -> bool:
         """ Send the insertion to TM. Additionally, send as input the object to hash on (in our case, this is the
@@ -74,8 +74,9 @@ class _TransactionGenerator(GenericSocketUser):
 
 
     def __call__(self):
-        logging.info(f"Connecting to TM at {self.kwargs['server']} through port {int(self.kwargs['port'])}.")
-        self.socket.connect((self.kwargs['server'], int(self.kwargs['port']), ))
+        hostname, port = self.context['coordinator_hostname'], int(self.context['port'])
+        logging.info(f"Connecting to TM at {hostname} through port {port}.")
+        self.socket.connect((hostname, port))
 
         # Complete this portion-- note: we are doing hashing at the TM instead of the client now...
         filename = self.kwargs['benchmark-file']
@@ -96,7 +97,6 @@ class _TransactionGenerator(GenericSocketUser):
         error = []
 
 
-        
         while True:
             try:
         
@@ -150,4 +150,9 @@ if __name__ == '__main__':
     with open(c_args.config_path + 'generator.json') as generator_config_file:
         generator_json = json.load(generator_config_file)
 
-    _TransactionGenerator(**generator_json)()
+    _TransactionGenerator(
+        coordinator_hostname=generator_json['coordinator-hostname'],
+        coordinator_port=generator_json['coordinator-port'],
+        benchmark_file=generator_json['benchmark-file'],
+        time_delta=generator_json['time-delta']
+    )()

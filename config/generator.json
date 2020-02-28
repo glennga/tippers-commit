@@ -1,7 +1,6 @@
 {
-  "server": "hibiscus01",
-  "port": 50000,
-
   "benchmark-file": "resources/xaa.txt",
-  "time_delta": 300
+  "coordinator-hostname": "hibiscus01",
+  "coordinator-port": 50000,
+  "time-delta": 300
 }
