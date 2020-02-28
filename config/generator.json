@@ -2,5 +2,6 @@
   "server": "hibiscus01",
   "port": 50000,
 
-  "benchmark-file": "resources/asd.txt"
+  "benchmark-file": "resources/xaa.txt",
+  "time_delta": 300
 }
