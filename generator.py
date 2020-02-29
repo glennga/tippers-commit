@@ -28,7 +28,7 @@ class _TransactionGenerator(GenericSocketUser):
 
         reply_message = self.read_message()
         logging.debug("Received from transaction manager: ", reply_message)
-        return reply_message == ResponseCode.OK
+        return reply_message[0] == ResponseCode.OK
 
     def _start_transaction(self) -> bytes:
         """ :return: The transaction ID. """
