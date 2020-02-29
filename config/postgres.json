@@ -1,0 +1,6 @@
+{
+  "user": "postgres",
+  "password": "FrappuccinoAppleData2",
+  "host": "localhost",
+  "database": "tippers"
+}

@@ -1,0 +1,35 @@
+[
+  {
+    "hostname": "hibiscus01",
+    "port": 50000
+  },
+  {
+    "hostname": "hibiscus02",
+    "port": 50000
+  },
+  {
+    "hostname": "hibiscus03",
+    "port": 50000
+  },
+  {
+    "hostname": "hibiscus04",
+    "port": 50000
+  },
+  {
+    "hostname": "hibiscus05",
+    "port": 50000
+  },
+  {
+    "hostname": "hibiscus06",
+    "port": 50000
+  },
+  {
+    "hostname": "hibiscus07",
+    "port": 50000
+  },
+  {
+    "hostname": "hibiscus08",
+    "port": 50000
+  }
+]
+
