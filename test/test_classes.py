@@ -129,6 +129,13 @@ class TestWriteAheadLogger(TestCase):
         self.assertEqual(uncommitted_coordinator_transactions[0], transaction_id)
         self.assertEqual(uncommitted_participant_transactions[0], transaction_id)
 
+        wal_coordinator.log_commit_of(transaction_id)
+        wal_participant.log_commit_of(transaction_id)
+        uncommitted_coordinator_transactions = wal_coordinator.get_uncommitted_transactions()
+        uncommitted_participant_transactions = wal_participant.get_uncommitted_transactions()
+        self.assertEqual(len(uncommitted_coordinator_transactions), 0)
+        self.assertEqual(len(uncommitted_participant_transactions), 0)
+
         wal_coordinator.flush_log()
         wal_participant.flush_log()
 

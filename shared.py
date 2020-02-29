@@ -176,6 +176,14 @@ class WriteAheadLogger(object):
         """ Record the given statement with the given transaction. """
         pass
 
+    def log_commit_of(self, transaction_id: bytes):
+        """ Log that the given transaction has committed. """
+        pass
+
+    def log_abort_of(self):
+        """ Log that the given transaction has been aborted. """
+        pass
+
     def flush_log(self) -> None:
         """ Persist the log file to disk. """
         pass
