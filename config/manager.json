@@ -1,0 +1,5 @@
+{
+  "coordinator-port": 50000,
+  "timeout-s": 2.0,
+  "wal-file": "wal.log"
+}

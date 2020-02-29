@@ -2,7 +2,6 @@
 import socket
 import logging
 import pickle
-import os
 import uuid
 
 from enum import IntEnum
@@ -127,86 +126,64 @@ class GenericSocketUser(object):
 
 class WriteAheadLogger(object):
     """ Class to standardize how WALs are formatted, written to, and read. """
-    logger = logging.getLogger(__qualname__)
 
     class Role(IntEnum):
         """ There exists two different types of WALs: coordinator and participant. """
         PARTICIPANT = 0
         COORDINATOR = 1
 
-    def parse_transaction_id(self, filename: str) -> bytes:
-        """ The transaction ID is encoded in the filename. """
-        return uuid.UUID(filename.split('.')[1]).bytes
+    @staticmethod
+    def _transaction_id_to_bytes(transaction_id: str):
+        return uuid.UUID(transaction_id).bytes
 
-    def __init__(self, transaction_id: bytes, wal_prefix: str):
-        self.log_file = open(wal_prefix + '.' + str(uuid.UUID(bytes=transaction_id)), 'rw')
-        self.transaction_id = transaction_id
+    @staticmethod
+    def _transaction_id_to_str(transaction_id: bytes):
+        return str(uuid.UUID(bytes=transaction_id))
 
-        # We keep a cursor for iterating through our log file.
-        self.cursor_position = self.log_file.tell()
+    def _create_tables(self) -> None:
+        """ Create the tables required for our log file, if they do not already exist. """
+        pass
 
-    def create_log(self, site_size: int = 0):
-        """ Create a new instance of a log file. """
-        self.log_file.seek(0)  # The header determines our role and the participants of our transactions.
-        self.log_file.write((('C' + ''.join('0' for _ in range(site_size))) if self.is_coordinator else 'P') + '\n')
-        self.cursor_position = self.log_file.tell()
+    def __init__(self, wal_file: str):
+        """ Open our log file and create the tables if they do not exist. """
+        pass
 
-    def add_participant(self, node_id: int):
-        if not self.is_coordinator:
-            error_message = 'Participants may not add other participants.'
-            self.logger.error(error_message)
-            raise PermissionError(error_message)
+    def initialize_transaction(self, transaction_id: bytes, role: Role) -> None:
+        """ Initialize a new transaction. We need to log our role in this transaction. """
+        pass
 
-        # Set the "bit" vector that denotes our active participants.
-        self.log_file.seek(1 + node_id)
-        self.log_file.write('1')
+    def get_role_in(self, transaction_id: bytes) -> Role:
+        """ Return our role in the given transaction (either a coordinator or a participant). """
+        pass
 
-    def get_participant_ids(self, site_size: int):
-        if not self.is_coordinator:
-            error_message = 'Participants should be site-unaware.'
-            self.logger.error(error_message)
-            raise PermissionError(error_message)
+    def is_transaction_active(self, transaction_id: bytes) -> bool:
+        """ Return true if the transaction has not been committed yet. False otherwise. """
+        pass
 
-        # Participants are denoted by a 1 in our "bit" vector.
-        participant_ids = []
-        self.log_file.seek(1)
-        for i in range(site_size):
-            if self.log_file.read(1) == '1':
-                participant_ids.append(i)
+    def add_participant(self, transaction_id: bytes, node_id: int) -> None:
+        """ Add a new participant to the transaction. This operation should only be called by a coordinator. """
+        pass
 
-        return participant_ids
+    def get_uncommitted_transactions(self) -> List[bytes]:
+        """ Return a list of transactions that have not been committed yet. """
+        pass
 
-    def log_statement(self, statement: str):
-        """ Log the SQL statement to the end of our file. Super naive implementation!! :-( """
-        self.set_cursor_end()
-        self.log_file.write(statement)
+    def get_participants_in(self, transaction_id: bytes) -> List[int]:
+        """ Return a list of node IDs that correspond to participants in the given transaction. """
+        pass
 
-    def flush_log(self):
-        self.log_file.flush()
+    def log_statement(self, transaction_id: bytes, statement: str) -> None:
+        """ Record the given statement with the given transaction. """
+        pass
 
-    def set_cursor_start(self):
-        self.log_file.seek(0)
-        self.cursor_position = self.log_file.tell()
+    def flush_log(self) -> None:
+        """ Persist the log file to disk. """
+        pass
 
-    def set_cursor_end(self):
-        self.log_file.seek(0, os.SEEK_END)
-        self.cursor_position = self.log_file.tell()
+    def get_redo_for(self, transaction_id: bytes) -> List[str]:
+        """ Get a list of statements to redo a given transaction. """
+        pass
 
-    def get_next_entry(self) -> str:
-        return self.log_file.readline()
-
-    def get_prev_entry(self) -> str:
-        line = ''
-        while self.cursor_position >= 0:
-            self.log_file.seek(self.cursor_position)
-            next_char = self.log_file.read(1)
-
-            # Read until we reach the previous line.
-            if next_char == '\n':
-                return line[::-1]
-
-            else:
-                line += next_char
-            self.cursor_position -= 1
-
-        return line[::-1]
+    def get_undo_for(self, transaction_id: bytes) -> List[str]:
+        """ Get a list of statements to undo a given transaction. """
+        pass
