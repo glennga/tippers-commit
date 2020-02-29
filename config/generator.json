@@ -1,5 +1,5 @@
 {
-  "benchmark-file": "resources/asd.txt",
+  "benchmark-file": "resources/xaa.txt",
   "coordinator-hostname": "hibiscus01",
   "coordinator-port": 50000,
   "time-delta": 300

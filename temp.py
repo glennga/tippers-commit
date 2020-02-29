@@ -33,9 +33,10 @@ def convert_str_timestamp(timestamp):
 
 def process_transaction(insert_list):
     tr_id = start_transaction()
+    #print(insert_list)
     for insert in insert_list:
         flag = insert_statement(tr_id, insert[0], insert[1])
-        if flag == 0:
+        if flag == False:
             abort_transaction(tr_id)
             break
 
@@ -49,7 +50,12 @@ file_r = open(filename, "r")
 sensor_dict = {}
 
 cur_timestamp = convert_str_timestamp(file_r.readline().rstrip().split(",")[-2])
-time_delta = cur_timestamp + datetime.timedelta(0,120)
+
+cur_timestamp = cur_timestamp + datetime.timedelta(0,600)
+
+#cur_timestamp = time_delta
+
+#print(cur_timestamp, time_delta)
 file_r.seek(0)
 
 line = ""
@@ -63,38 +69,37 @@ while True:
         if record == "":
             break
             continue
-        #print(record)
+        
         error = [record]
         timestamp = convert_str_timestamp(record.split(",")[-2])
-        #error = [timestamp, record]
-
+        
         sensor_id = record.split(",")
-        sensor_id = sensor_id[0].split("(")
-        sensor_id = sensor_id[1]
+        sensor_id = sensor_id[-1]
+        
+        sensor_id = sensor_id.replace(")", "")
+        sensor_id = sensor_id.replace(";", "")
         sensor_id = sensor_id.replace("'","")
-
-        if timestamp <= cur_timestamp:
+        sensor_id = sensor_id.replace(" ", "")
+        
+        if timestamp <=  cur_timestamp:
             if sensor_id in sensor_dict:
                 sensor_dict[sensor_id].append([[record],[sensor_id, timestamp]])
 
 
             else:
-                sensor_dict[sensor_id] = [[[record], [sensor_id]]]
+                sensor_dict[sensor_id] = [[[record], [sensor_id, timestamp]]]
 
         else:
-            print(sensor_dict)
-            print("heis")
-
             for (k,v) in sensor_dict.items():
+                #print(len(v))
                 process_transaction(v)
             #process_transaction(sensor_dict)
             
-            cur_timestamp = cur_timestamp + datetime.timedelta(0,300)
+            cur_timestamp = cur_timestamp + datetime.timedelta(0,600)
             sensor_dict = {}
 
         ctr += 1
     except Exception as e:
-        #process_transaction(sensor_dict)
         print(e)
         print(sys.exc_info()[-1].tb_lineno)
         print(error)
