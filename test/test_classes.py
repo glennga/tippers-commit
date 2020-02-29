@@ -1,6 +1,5 @@
 import threading
 import unittest
-import sys
 import os
 
 from unittest import TestCase
@@ -10,7 +9,8 @@ from shared import *
 class TestGenericSocketUser(TestCase):
     """ Verifies the class that allows processes to talk with one another. """
     logger = logging.getLogger(__qualname__)
-    test_port = 55000
+    failure_marker = False
+    test_port = 51000
 
     class _TestServer(threading.Thread, GenericSocketUser):
         logger = logging.getLogger(__qualname__)
@@ -31,6 +31,23 @@ class TestGenericSocketUser(TestCase):
             self.send_message(client_message[0], client_message[1:], client_socket)
             self.logger.info("Sending same message back to client.")
             client_socket.close()
+
+    class _TestFaultyServer(threading.Thread, GenericSocketUser):
+        logger = logging.getLogger(__qualname__)
+
+        def __init__(self, port: int):
+            threading.Thread.__init__(self, daemon=True)
+            GenericSocketUser.__init__(self)
+            self.socket.bind((socket.gethostname(), port))
+            self.socket.listen(5)
+
+        def run(self) -> None:
+            client_socket, client_address = self.socket.accept()
+            self.logger.info(f"Connection accepted from {client_address}.")
+            self.close(client_socket)
+
+    def tearDown(self) -> None:
+        TestGenericSocketUser.failure_marker = False
 
     def test_message_transfer(self):
         working_port = self.test_port
@@ -91,6 +108,42 @@ class TestGenericSocketUser(TestCase):
         server.join()
         client.socket.close()
         server.socket.close()
+
+    def test_receive_timeout(self):
+        working_port = self.test_port + 4
+        server = self._TestFaultyServer(working_port)
+        server.start()
+
+        # Callback will set our failed marker to true.
+        def client_callback_1():
+            TestGenericSocketUser.failure_marker = True
+
+        client = GenericSocketUser()
+        client.socket.connect((socket.gethostname(), working_port))
+        self.logger.info(f"Connected w/ server at {(socket.gethostname(), working_port)}.")
+        client.set_socket_error_callback(client_callback_1)
+
+        response = client.read_message()
+        self.assertIsNone(response)
+        self.assertTrue(TestGenericSocketUser.failure_marker)
+
+    def test_send_timeout(self):
+        working_port = self.test_port + 3
+        server = self._TestFaultyServer(working_port)
+        server.start()
+
+        # Callback will set our failed marker to true.
+        def client_callback_2():
+            TestGenericSocketUser.failure_marker = True
+
+        client = GenericSocketUser()
+        client.socket.connect((socket.gethostname(), working_port))
+        self.logger.info(f"Connected w/ server at {(socket.gethostname(), working_port)}.")
+        client.set_socket_error_callback(client_callback_2)
+
+        client.send_response(ResponseCode.OK)
+        self.logger.info(f"Sent test message.")
+        self.assertTrue(TestGenericSocketUser.failure_marker)
 
 
 class TestWriteAheadLogger(TestCase):

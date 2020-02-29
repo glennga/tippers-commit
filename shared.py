@@ -3,6 +3,7 @@ import socket
 import logging
 import pickle
 import uuid
+import sys
 
 from enum import IntEnum
 from typing import List
@@ -39,89 +40,119 @@ class ResponseCode(IntEnum):
 
 
 class GenericSocketUser(object):
-    """ Class to standardize message send and receipt. Status: TESTED """
+    """ Class to standardize message send and receipt. """
     logger = logging.getLogger(__qualname__)
 
     # The first portion of a message, the length, is of fixed size.
     MESSAGE_LENGTH_BYTE_SIZE = 5
 
+    @staticmethod
+    def _default_socket_error_callback():
+        GenericSocketUser.logger.warning("Exception caught. Exiting now.")
+        sys.exit(0)
+
     def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket_error_callback = self._default_socket_error_callback
+
+    def set_socket_error_callback(self, f):
+        """ If a socket throws an error, handle the error appropriately by calling this function. """
+        self.socket_error_callback = f
 
     def read_message(self, client_socket: socket.socket = None):
         """ Read message_length bytes from the specified socket, and deserialize our message. """
         working_socket = self.socket if client_socket is None else client_socket
 
-        # Read our message length.
-        chunks, bytes_read = [], 0
-        while bytes_read < GenericSocketUser.MESSAGE_LENGTH_BYTE_SIZE:
-            chunk = working_socket.recv(GenericSocketUser.MESSAGE_LENGTH_BYTE_SIZE - bytes_read)
+        try:
+            # Read our message length.
+            chunks, bytes_read = [], 0
+            while bytes_read < GenericSocketUser.MESSAGE_LENGTH_BYTE_SIZE:
+                chunk = working_socket.recv(GenericSocketUser.MESSAGE_LENGTH_BYTE_SIZE - bytes_read)
 
-            if chunk == b'':
-                exception_message = "Socket connection broken."
-                self.logger.error(exception_message)
-                raise RuntimeError(exception_message)
-            else:
-                chunks.append(chunk)
-                bytes_read += len(chunk)
+                if chunk == b'':
+                    self.socket_error_callback()
+                    self.close(client_socket)
+                    return None
+                else:
+                    chunks.append(chunk)
+                    bytes_read += len(chunk)
 
-        # Obtain our length.
-        message_length = pickle.loads(b''.join(chunks))
-        self.logger.debug('Reading message of length: ', message_length)
+            # Obtain our length.
+            message_length = pickle.loads(b''.join(chunks))
+            self.logger.debug('Reading message of length: ', message_length)
 
-        # Repeat for the message content.
-        chunks, bytes_read = [], 0
-        while bytes_read < message_length:
-            chunk = working_socket.recv(min(message_length - bytes_read, 2048))
+            # Repeat for the message content.
+            chunks, bytes_read = [], 0
+            while bytes_read < message_length:
+                chunk = working_socket.recv(min(message_length - bytes_read, 2048))
 
-            if chunk == b'':
-                exception_message = "Socket connection broken."
-                self.logger.error(exception_message)
-                raise RuntimeError(exception_message)
-            else:
-                chunks.append(chunk)
-                bytes_read += len(chunk)
+                if chunk == b'':
+                    self.socket_error_callback()
+                    self.close(client_socket)
+                    return None
+                else:
+                    chunks.append(chunk)
+                    bytes_read += len(chunk)
 
-        # Reconstruct message, and deserialize.
-        received_message = pickle.loads(b''.join(chunks))
-        self.logger.debug('Received message: ', received_message)
-        return received_message
+            # Reconstruct message, and deserialize.
+            received_message = pickle.loads(b''.join(chunks))
+            self.logger.debug('Received message: ', received_message)
+            return received_message
+
+        except Exception:
+            self.socket_error_callback()
+            self.close(client_socket)
+            return None
 
     def send_message(self, op_code: OpCode, contents: List, client_socket: socket.socket = None):
         """ Correctly format a message to send to another socket user. """
         working_socket = self.socket if client_socket is None else client_socket
         message = [op_code] + contents
 
-        # The first item we always send is the message length.
         serialized_message = pickle.dumps(message)
-        working_socket.send(pickle.dumps(len(serialized_message)))
+        try:
+            working_socket.send(pickle.dumps(len(serialized_message)))
+            working_socket.send(serialized_message)
 
-        # Next, the message itself.
-        working_socket.send(serialized_message)
+        except Exception:
+            self.socket_error_callback()
+            self.close(client_socket)
+            return None
 
     def send_op(self, op_code: OpCode, client_socket: socket.socket = None):
         """ Correctly format a OP code to send to another socket user. """
         working_socket = self.socket if client_socket is None else client_socket
         message = [op_code]
 
-        # The first item we always send is the message length.
         serialized_message = pickle.dumps(message)
-        working_socket.send(pickle.dumps(len(serialized_message)))
+        try:
+            working_socket.send(pickle.dumps(len(serialized_message)))
+            working_socket.send(serialized_message)
 
-        # Next, the message itself.
-        working_socket.send(serialized_message)
+        except Exception:
+            self.socket_error_callback()
+            self.close(client_socket)
+            return None
 
     def send_response(self, response_code: ResponseCode, client_socket: socket.socket = None):
         """ Correctly format a response code to send to another socket user. """
         working_socket = self.socket if client_socket is None else client_socket
         message = [response_code]
 
-        # The first item we always send is the message length.
         serialized_message = pickle.dumps(message)
-        working_socket.send(pickle.dumps(len(serialized_message)))
+        try:
+            working_socket.send(pickle.dumps(len(serialized_message)))
+            working_socket.send(serialized_message)
 
-        # Next, the message itself.
-        working_socket.send(serialized_message)
+        except Exception:
+            self.socket_error_callback()
+            self.close(client_socket)
+            return None
+
+    def close(self, client_socket: socket.socket = None):
+        if client_socket is not None:
+            client_socket.close()
+        self.socket.close()
 
 
 class WriteAheadLogger(object):
