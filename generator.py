@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import datetime
+import sys
 
 from shared import *
 
@@ -47,99 +49,78 @@ class _TransactionGenerator(GenericSocketUser):
         self.send_message(OpCode.COMMIT_TRANSACTION, [transaction_id])
         logging.info("Received from transaction manager: ", self.read_message())
 
-
-
     @staticmethod
-    def convert_str_timestamp(timestamp):
-
-        timestamp = timestamp.replace(" ","")
-        timestamp = timestamp.replace("'","")
+    def _convert_timestamp(timestamp):
+        timestamp = timestamp.replace(" ", "")
+        timestamp = timestamp.replace("'", "")
         timestamp = timestamp[0:10] + " " + timestamp[10:]
-        timestamp = dt.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
 
         return timestamp
-    
 
     def _process_transaction(self, insert_list: list):
-        tr_id = self._start_transaction()
-        #print(insert_list)
+        transaction_id = self._start_transaction()
+
         for insert in insert_list:
-            flag = self._insert_statement(tr_id, insert[0], insert[1])
-            if flag == False:
-                self._abort_transaction(tr_id)
+            flag = self._insert_statement(transaction_id, insert[0], insert[1])
+            if not flag:
+                self._abort_transaction(transaction_id)
                 break
 
-        self._commit_transaction(tr_id)
-
-
+        self._commit_transaction(transaction_id)
 
     def __call__(self):
         hostname, port = self.context['coordinator_hostname'], int(self.context['port'])
         logging.info(f"Connecting to TM at {hostname} through port {port}.")
         self.socket.connect((hostname, port))
 
-        # Complete this portion-- note: we are doing hashing at the TM instead of the client now...
-        filename = self.kwargs['benchmark-file']
-        time_delta = self.kwargs['time_delta']
-
-
-        file_r = open(filename, "r")
-
+        file_r = open(self.context['benchmark-file'], "r")
         sensor_dict = {}
 
-        cur_timestamp = convert_str_timestamp(file_r.readline().rstrip().split(",")[-2])
-        cur_timestamp = cur_timestamp + datetime.timedelta(0,time_delta)
-
+        cur_timestamp = self._convert_timestamp(file_r.readline().rstrip().split(",")[-2])
+        cur_timestamp = cur_timestamp + datetime.timedelta(0, self.context['time_delta'])
         file_r.seek(0)
 
-        #line = ""
         ctr = 0
-        error = []
-
-
         while True:
             try:
-        
                 record = file_r.readline().rstrip()
                 if record == "":
+                    self.logger.debug('Blank line found. Skipping.')
                     break
-                    continue
-                
-                #error = [record]
-                timestamp = convert_str_timestamp(record.split(",")[-2])
-                
+
+                timestamp = self._convert_timestamp(record.split(",")[-2])
+
                 sensor_id = record.split(",")
                 sensor_id = sensor_id[-1]
-                
+
                 sensor_id = sensor_id.replace(")", "")
                 sensor_id = sensor_id.replace(";", "")
-                sensor_id = sensor_id.replace("'","")
+                sensor_id = sensor_id.replace("'", "")
                 sensor_id = sensor_id.replace(" ", "")
-                
-                if timestamp <=  cur_timestamp:
+
+                if timestamp <= cur_timestamp:
                     if sensor_id in sensor_dict:
-                        sensor_dict[sensor_id].append([[record],[sensor_id, timestamp]])
-
-
+                        sensor_dict[sensor_id].append([[record], [sensor_id, timestamp]])
                     else:
                         sensor_dict[sensor_id] = [[[record], [sensor_id, timestamp]]]
 
+                    self.logger.debug(f'Processed: {record}, ({sensor_id}, {timestamp})')
+
                 else:
-                    for (k,v) in sensor_dict.items():
-                        process_transaction(v)
-                    
-                    cur_timestamp = cur_timestamp + datetime.timedelta(0,time_delta)
+                    for (k, v) in sensor_dict.items():
+                        self._process_transaction(v)
+
+                    cur_timestamp = cur_timestamp + datetime.timedelta(0, self.context['time_delta'])
                     sensor_dict = {}
 
                 ctr += 1
-                
+
             except Exception as e:
-                print(e)
-                print(sys.exc_info()[-1].tb_lineno)
+                self.logger.error(f'Exception caught: {e}\n {sys.exc_info()[-1].tb_lineno}')
                 break
 
         file_r.close()
-
 
 
 if __name__ == '__main__':
