@@ -2,7 +2,6 @@
 import socket
 import logging
 import pickle
-import sys
 import os
 import uuid
 
@@ -41,10 +40,11 @@ class ResponseCode(IntEnum):
 
 
 class GenericSocketUser(object):
-    """ Class to standardize message send and receipt. """
+    """ Class to standardize message send and receipt. Status: TESTED """
+    logger = logging.getLogger(__qualname__)
 
     # The first portion of a message, the length, is of fixed size.
-    MESSAGE_LENGTH_BYTE_SIZE = 28
+    MESSAGE_LENGTH_BYTE_SIZE = 5
 
     def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -60,15 +60,15 @@ class GenericSocketUser(object):
 
             if chunk == b'':
                 exception_message = "Socket connection broken."
-                logging.error(exception_message)
+                self.logger.error(exception_message)
                 raise RuntimeError(exception_message)
             else:
                 chunks.append(chunk)
                 bytes_read += len(chunk)
 
         # Obtain our length.
-        message_length = int.from_bytes(b''.join(chunks), byteorder='big')
-        logging.debug('Reading message of length: ', message_length)
+        message_length = pickle.loads(b''.join(chunks))
+        self.logger.debug('Reading message of length: ', message_length)
 
         # Repeat for the message content.
         chunks, bytes_read = [], 0
@@ -77,7 +77,7 @@ class GenericSocketUser(object):
 
             if chunk == b'':
                 exception_message = "Socket connection broken."
-                logging.error(exception_message)
+                self.logger.error(exception_message)
                 raise RuntimeError(exception_message)
             else:
                 chunks.append(chunk)
@@ -85,7 +85,7 @@ class GenericSocketUser(object):
 
         # Reconstruct message, and deserialize.
         received_message = pickle.loads(b''.join(chunks))
-        logging.debug('Received message: ', received_message)
+        self.logger.debug('Received message: ', received_message)
         return received_message
 
     def send_message(self, op_code: OpCode, contents: List, client_socket: socket.socket = None):
@@ -94,10 +94,11 @@ class GenericSocketUser(object):
         message = [op_code] + contents
 
         # The first item we always send is the message length.
-        working_socket.send(bytes(sys.getsizeof(message)))
+        serialized_message = pickle.dumps(message)
+        working_socket.send(pickle.dumps(len(serialized_message)))
 
         # Next, the message itself.
-        working_socket.send(pickle.loads(message))
+        working_socket.send(serialized_message)
 
     def send_op(self, op_code: OpCode, client_socket: socket.socket = None):
         """ Correctly format a OP code to send to another socket user. """
@@ -105,10 +106,11 @@ class GenericSocketUser(object):
         message = [op_code]
 
         # The first item we always send is the message length.
-        working_socket.send(bytes(sys.getsizeof(message)))
+        serialized_message = pickle.dumps(message)
+        working_socket.send(pickle.dumps(len(serialized_message)))
 
         # Next, the message itself.
-        working_socket.send(pickle.loads(message))
+        working_socket.send(serialized_message)
 
     def send_response(self, response_code: ResponseCode, client_socket: socket.socket = None):
         """ Correctly format a response code to send to another socket user. """
@@ -116,17 +118,23 @@ class GenericSocketUser(object):
         message = [response_code]
 
         # The first item we always send is the message length.
-        working_socket.send(bytes(sys.getsizeof(message)))
+        serialized_message = pickle.dumps(message)
+        working_socket.send(pickle.dumps(len(serialized_message)))
 
         # Next, the message itself.
-        working_socket.send(pickle.loads(message))
+        working_socket.send(serialized_message)
 
 
 class WriteAheadLogger(object):
     """ Class to standardize how WALs are formatted, written to, and read. """
+    logger = logging.getLogger(__qualname__)
 
-    @staticmethod
-    def parse_transaction_id(filename: str) -> bytes:
+    class Role(IntEnum):
+        """ There exists two different types of WALs: coordinator and participant. """
+        PARTICIPANT = 0
+        COORDINATOR = 1
+
+    def parse_transaction_id(self, filename: str) -> bytes:
         """ The transaction ID is encoded in the filename. """
         return uuid.UUID(filename.split('.')[1]).bytes
 
@@ -146,7 +154,7 @@ class WriteAheadLogger(object):
     def add_participant(self, node_id: int):
         if not self.is_coordinator:
             error_message = 'Participants may not add other participants.'
-            logging.error(error_message)
+            self.logger.error(error_message)
             raise PermissionError(error_message)
 
         # Set the "bit" vector that denotes our active participants.
@@ -156,7 +164,7 @@ class WriteAheadLogger(object):
     def get_participant_ids(self, site_size: int):
         if not self.is_coordinator:
             error_message = 'Participants should be site-unaware.'
-            logging.error(error_message)
+            self.logger.error(error_message)
             raise PermissionError(error_message)
 
         # Participants are denoted by a 1 in our "bit" vector.
