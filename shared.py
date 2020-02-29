@@ -180,7 +180,7 @@ class WriteAheadLogger(object):
         """ Log that the given transaction has committed. """
         pass
 
-    def log_abort_of(self):
+    def log_abort_of(self, transaction_id: bytes):
         """ Log that the given transaction has been aborted. """
         pass
 
@@ -194,4 +194,8 @@ class WriteAheadLogger(object):
 
     def get_undo_for(self, transaction_id: bytes) -> List[str]:
         """ Get a list of statements to undo a given transaction. """
+        pass
+
+    def close(self):
+        """ Close the resource. """
         pass
