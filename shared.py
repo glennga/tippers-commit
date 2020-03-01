@@ -187,6 +187,10 @@ class WriteAheadLogger(object):
         """ Return our role in the given transaction (either a coordinator or a participant). """
         pass
 
+    def get_coordinator_for(self, transaction_id: bytes) -> int:
+        """ Return the node-id of the coordinator associated with the given transaction. """
+        pass
+
     def is_transaction_active(self, transaction_id: bytes) -> bool:
         """ Return true if the transaction has not been committed yet. False otherwise. """
         pass
