@@ -27,6 +27,10 @@ class OpCode(IntEnum):
     COMMIT_FROM_COORDINATOR = 8
     ROLLBACK_FROM_COORDINATOR = 9
 
+    # For recovery use when a TM fails.
+    TRANSACTION_STATUS = 10
+    RECONNECT_PARTICIPANT = 11
+
 
 class ResponseCode(IntEnum):
     """ Response codes. """
@@ -46,18 +50,8 @@ class GenericSocketUser(object):
     # The first portion of a message, the length, is of fixed size.
     MESSAGE_LENGTH_BYTE_SIZE = 5
 
-    @staticmethod
-    def _default_socket_error_callback():
-        GenericSocketUser.logger.warning("Exception caught. Exiting now.")
-        sys.exit(0)
-
     def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket_error_callback = self._default_socket_error_callback
-
-    def set_socket_error_callback(self, f):
-        """ If a socket throws an error, handle the error appropriately by calling this function. """
-        self.socket_error_callback = f
 
     def read_message(self, client_socket: socket.socket = None):
         """ Read message_length bytes from the specified socket, and deserialize our message. """
@@ -70,7 +64,6 @@ class GenericSocketUser(object):
                 chunk = working_socket.recv(GenericSocketUser.MESSAGE_LENGTH_BYTE_SIZE - bytes_read)
 
                 if chunk == b'':
-                    self.socket_error_callback()
                     self.close(client_socket)
                     return None
                 else:
@@ -87,7 +80,6 @@ class GenericSocketUser(object):
                 chunk = working_socket.recv(min(message_length - bytes_read, 2048))
 
                 if chunk == b'':
-                    self.socket_error_callback()
                     self.close(client_socket)
                     return None
                 else:
@@ -100,11 +92,10 @@ class GenericSocketUser(object):
             return received_message
 
         except Exception:
-            self.socket_error_callback()
             self.close(client_socket)
             return None
 
-    def send_message(self, op_code: OpCode, contents: List, client_socket: socket.socket = None):
+    def send_message(self, op_code: OpCode, contents: List, client_socket: socket.socket = None) -> bool:
         """ Correctly format a message to send to another socket user. """
         working_socket = self.socket if client_socket is None else client_socket
         message = [op_code] + contents
@@ -113,13 +104,13 @@ class GenericSocketUser(object):
         try:
             working_socket.send(pickle.dumps(len(serialized_message)))
             working_socket.send(serialized_message)
+            return True
 
         except Exception:
-            self.socket_error_callback()
             self.close(client_socket)
-            return None
+            return False
 
-    def send_op(self, op_code: OpCode, client_socket: socket.socket = None):
+    def send_op(self, op_code: OpCode, client_socket: socket.socket = None) -> bool:
         """ Correctly format a OP code to send to another socket user. """
         working_socket = self.socket if client_socket is None else client_socket
         message = [op_code]
@@ -128,13 +119,13 @@ class GenericSocketUser(object):
         try:
             working_socket.send(pickle.dumps(len(serialized_message)))
             working_socket.send(serialized_message)
+            return True
 
         except Exception:
-            self.socket_error_callback()
             self.close(client_socket)
-            return None
+            return False
 
-    def send_response(self, response_code: ResponseCode, client_socket: socket.socket = None):
+    def send_response(self, response_code: ResponseCode, client_socket: socket.socket = None) -> bool:
         """ Correctly format a response code to send to another socket user. """
         working_socket = self.socket if client_socket is None else client_socket
         message = [response_code]
@@ -143,11 +134,11 @@ class GenericSocketUser(object):
         try:
             working_socket.send(pickle.dumps(len(serialized_message)))
             working_socket.send(serialized_message)
+            return True
 
         except Exception:
-            self.socket_error_callback()
             self.close(client_socket)
-            return None
+            return False
 
     def close(self, client_socket: socket.socket = None):
         if client_socket is not None:

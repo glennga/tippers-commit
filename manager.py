@@ -14,7 +14,7 @@ class _ServerDaemonThread(threading.Thread, GenericSocketUser):
     logger = logging.getLogger(__qualname__)
 
     def __init__(self, hostname: str, **context):
-        self.child_threads = []
+        self.child_threads = {}
         self.hostname = hostname
         self.context = context
 
@@ -22,12 +22,26 @@ class _ServerDaemonThread(threading.Thread, GenericSocketUser):
         GenericSocketUser.__init__(self)
 
     def _recovery_state(self):
+        # Initialize our site-list, which describes our cluster.
+        with open(self.context['site-json']) as site_config_file:
+            site_json = json.load(site_config_file)
+        site_list = site_json
+        self.logger.info("TM is aware of site: ", site_list)
+
         wal = WriteAheadLogger(self.context['wal_file'])
         for transaction_id in wal.get_uncommitted_transactions():
-            # Get our role in this transaction.
             role = wal.get_role_in(transaction_id)
 
-            # TODO: FINISH
+            if role == WriteAheadLogger.Role.PARTICIPANT:
+                # Determine who our coordinator is, and get the transaction status.
+                coordinator_id = wal.get_coordinator_for(transaction_id)
+                coordinator_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                coordinator_socket.connect((site_list[coordinator_id].hostname, site_list[coordinator_id].port))
+                self.logger.info(f"Connecting to coordinator: {site_list[coordinator_id].hostname}.")
+
+                self.send_op(OpCode.TRANSACTION_STATUS, coordinator_socket)
+                tranasction_status = self.read_message(coordinator_socket)
+
 
     def run(self) -> None:
         # Before starting, resolve any transactions that haven't been committed.
@@ -52,12 +66,13 @@ class _ServerDaemonThread(threading.Thread, GenericSocketUser):
             elif requested_op == OpCode.START_TRANSACTION:
                 # Our transaction originates at this TM. Spawn a separate thread to handle this client.
                 self.logger.info("Transaction has been started. Spawning coordinator thread.")
-                self.child_threads.append(coordinate.TransactionCoordinatorThread(
+                coordinator_thread = coordinate.TransactionCoordinatorThread(
                     hostname=self.hostname,
                     client_socket=client_socket,
                     **self.context
-                ))
-                self.child_threads[-1].start()
+                )
+                self.child_threads[coordinator_thread.transaction_id] = coordinator_thread
+                coordinator_thread.start()
 
             elif requested_op == OpCode.INITIATE_PARTICIPANT:
                 # Parse the transaction ID from the message.
@@ -65,12 +80,23 @@ class _ServerDaemonThread(threading.Thread, GenericSocketUser):
 
                 # We are a part of a transaction that does not originate at this TM. Spawn a participant.
                 self.logger.info(f"We are a participant in transaction {transaction_id}. Spawning participant.")
-                self.child_threads.append(participate.TransactionParticipantThread(
+                self.child_threads[transaction_id] = participate.TransactionParticipantThread(
                     transaction_id=transaction_id,
                     client_socket=client_socket,
                     **self.context
-                ))
-                self.child_threads[-1].start()
+                )
+                self.child_threads[transaction_id].start()
+
+            elif requested_op == OpCode.RECONNECT_PARTICIPANT:
+                # Parse the transaction ID from the message.
+                transaction_id = client_message[1]
+                if transaction_id not in self.child_threads.keys():
+                    self.logger.error(f"We are not a participant in transaction {transaction_id}! Ignoring.")
+                    continue
+
+                # Connect a new socket to the transaction.
+                self.logger.info(f"Attaching new socket to participant thread from transaction {transaction_id}.")
+                self.child_threads[transaction_id].reassign_socket(client_socket)
 
             else:
                 self.logger.warning("Unknown/unsupported operation received. Taking no action. ", client_message)
