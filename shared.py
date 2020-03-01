@@ -42,6 +42,10 @@ class ResponseCode(IntEnum):
     ABORT_FROM_PARTICIPANT = 3
     ACKNOWLEDGE_END = 4
 
+    # For recovery use when a TM fails.
+    TRANSACTION_COMMITTED = 5
+    TRANSACTION_ABORTED = 6
+
 
 class GenericSocketUser(object):
     """ Class to standardize message send and receipt. """

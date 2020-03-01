@@ -1,15 +1,15 @@
 """ This file contains all participant related functionality. """
 import threading
 import psycopg2
+import time
 
-from typing import Callable
 from shared import *
 
 
-class _States(IntEnum):
+class ParticipantStates(IntEnum):
     """ We define 6 states for a participant. """
     INITIALIZATION = 0
-    INSERT = 1
+    OPERATIONAL = 1
     PREPARED = 2
     RECOVERY = 3
     WAITING = 4
@@ -37,14 +37,12 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
         )
         self.conn.autocommit = False
 
-        # To enter the RECOVERY state instead, parent must explicitly set this.
-        self.state = _States.INITIALIZATION
+        # These are used when a socket fails.
+        self.socket.settimeout(context['failure_time'])
+        self.message_from_parent = None
 
-        def _enter_waiting_state_callback():
-            """  """
-            self.state = _States.WAITING
-
-        self.set_socket_error_callback(_enter_waiting_state_callback)
+        # To enter the RECOVERY state instead, parent must explicitly change this after instantiation.
+        self.state = ParticipantStates.INITIALIZATION
 
     def _abort_action(self):
         """ Undo each INSERT from most to least recent. """
@@ -57,15 +55,34 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
 
             except Exception as e:
                 self.logger.fatal("Exception caught. Exiting now. Database is in a corrupted state!", e)
-                self.state = _States.FINISHED
+                self.state = ParticipantStates.FINISHED
                 return
 
         # Commit this work to the RM.
-        self.state = _States.FINISHED
+        self.state = ParticipantStates.FINISHED
         self.conn.commit()
 
     def _waiting_state(self):
-        """  """
+        """ Close our socket and wait for our parent thread to attach a new connection. """
+        while self.message_from_parent is None:
+            time.sleep(self.context['wait_time'])
+        self.logger.info("Moving out of the WAITING state.")
+
+        # From the WAITING state, we can only move to PREPARED or FINISHED state if we are told to abort.
+        if self.message_from_parent[0] == OpCode.PREPARE_TO_COMMIT:
+            self.logger.info("Moving to the PREPARE state.")
+            self._prepared_state(self.message_from_parent)
+
+        elif self.message_from_parent[0] == OpCode.ABORT_TRANSACTION:
+            self.logger.info("Coordinator has informed us that we must ABORT.")
+            self._abort_action()
+            self.state = ParticipantStates.FINISHED
+
+        else:
+            self.logger.warning("Unknown operation received. Ignoring and moving to FINISHED state.")
+            self.state = ParticipantStates.FINISHED
+
+        self.message_from_parent = None
 
     def _recovery_state(self):
         """ Redo each INSERT from least to most recent, if we receive a COMMIT status from our coordinator.  """
@@ -89,18 +106,18 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
 
         elif coordinator_response[0] == ResponseCode.TRANSACTION_ABORTED:
             self._abort_action()
-            self.state = _States.FINISHED
+            self.state = ParticipantStates.FINISHED
 
         else:
             self.logger.error('Unknown operation received. Ignoring. ', coordinator_response)
 
-    def _insert_state(self, client_message: List):
+    def _operational_state(self, client_message: List):
         requested_op = client_message[0]
         if requested_op == OpCode.INSERT_FROM_COORDINATOR:
             # We have been issued an INSERT from our coordinator.
             statement = client_message[2]
-            self.execute_statement(statement)
-
+            if not self.execute_statement(statement):
+                self.state = ParticipantStates.WAITING
 
         elif requested_op == OpCode.PREPARE_TO_COMMIT:
             # We have been asked to prepare to commit. Send the commit to our RM.
@@ -109,18 +126,18 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
                 self.wal.flush_log()
                 self.conn.commit()
 
-                self.set_socket_error_callback(_enter_waiting_state_callback)
                 self.logger.info("RM has approved of COMMIT. Sending PREPARE back to coordinator.")
-                self.send_response(ResponseCode.PREPARED_FROM_PARTICIPANT)
-                self.state = _States.PREPARED
+                is_send_success = self.send_response(ResponseCode.PREPARED_FROM_PARTICIPANT)
+                self.state = ParticipantStates.WAITING if not is_send_success else ParticipantStates.PREPARED
 
             except Exception as e:
-                self.send_response(ResponseCode.ABORT_FROM_PARTICIPANT)
-                self.logger.warning("RM could not commit. Sent ABORT back to coordinator.")
+                is_send_success = self.send_response(ResponseCode.ABORT_FROM_PARTICIPANT)
+                self.logger.warning("RM could not commit. Sending ABORT back to coordinator.")
                 self.logger.warning("Exception message: ", e)
 
-                self._abort_action()
-                self.state = _States.FINISHED
+                if is_send_success:
+                    self._abort_action()
+                self.state = ParticipantStates.WAITING if not is_send_success else ParticipantStates.FINISHED
 
         elif requested_op == OpCode.ABORT_TRANSACTION:
             # We have been asked to ABORT. Flush our logs to disk, rollback, and reply with an ACK.
@@ -134,8 +151,8 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
             self.wal.close()
 
             self.logger.info('Acknowledging ABORT. Sending ACK back to the coordinator.')
-            self.send_response(ResponseCode.ACKNOWLEDGE_END)
-            self.state = _States.FINISHED
+            self.state = ParticipantStates.WAITING if not self.send_response(
+                ResponseCode.ACKNOWLEDGE_END) else ParticipantStates.FINISHED
 
         else:
             self.logger.warning('Unknown operation received. Ignoring. ', client_message)
@@ -145,13 +162,12 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
         if requested_op == OpCode.COMMIT_FROM_COORDINATOR:
             # We have been asked to commit. Write "COMPLETION" to our log and reply with an ACK.
             self.wal.log_commit_of(self.transaction_id)
-            self.conn.commit()
             self.conn.close()
             self.wal.close()
 
-            self.send_response(ResponseCode.ACKNOWLEDGE_END)
+            self.state = ParticipantStates.WAITING if not self.send_response(
+                ResponseCode.ACKNOWLEDGE_END) else ParticipantStates.FINISHED
             self.logger.info('Acknowledging COMMIT. Sent ACK back to the coordinator.')
-            self.state = _States.FINISHED
 
         elif requested_op == OpCode.ROLLBACK_FROM_COORDINATOR:
             # We have been asked to rollback. Flush our logs to disk, rollback, and reply with an ACK.
@@ -164,9 +180,9 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
             self.wal.log_abort_of(self.transaction_id)
             self.wal.close()
 
+            self.state = ParticipantStates.WAITING if not self.send_response(
+                ResponseCode.ACKNOWLEDGE_END) else ParticipantStates.FINISHED
             self.logger.info('Acknowledging ABORT. Sending ACK back to the coordinator.')
-            self.send_response(ResponseCode.ACKNOWLEDGE_END)
-            self.state = _States.FINISHED
 
         else:
             self.logger.warning('Unknown operation received. Ignoring. ', client_message)
@@ -193,19 +209,19 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
             self.send_response(ResponseCode.FAIL)
             sys.exit(0)
 
-    def reassign_socket(self, client_socket: socket.socket):
-        self.socket_mutex.acquire()
+    def inject_socket(self, client_socket: socket.socket, client_message: List):
+        """ Inject a new socket connection for our participant to use. """
         self.socket = client_socket
-        self.socket_mutex.release()
+        self.message_from_parent = client_message
 
     def run(self) -> None:
-        if self.state == _States.RECOVERY:
+        if self.state == ParticipantStates.RECOVERY:
             # If specified by our parent thread, enter the recovery state.
             self._recovery_state()
             return
 
         # Otherwise, transition to the insert state.
-        self.state = _States.INSERT
+        self.state = ParticipantStates.OPERATIONAL
 
         while True:
             # Read the message from the client. Parse the OP code.
@@ -223,12 +239,15 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
                 self.logger.info(f"NO-OP received. Taking no action. :-)")
                 continue
 
-            if self.state == _States.INSERT:
-                self._insert_state(client_message)
+            if self.state == ParticipantStates.OPERATIONAL:
+                self._operational_state(client_message)
 
-            elif self.state == _States.PREPARED:
+            elif self.state == ParticipantStates.PREPARED:
                 self._prepared_state(client_message)
 
+            elif self.state == ParticipantStates.WAITING:
+                self._waiting_state()
+
             else:
-                self.logger.info(f"No longer in INSERT or PREPARED state. Exiting now from {self.state}.")
+                self.logger.info(f"No longer in transitional state. Exiting now from {self.state}.")
                 return

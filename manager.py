@@ -39,9 +39,21 @@ class _ServerDaemonThread(threading.Thread, GenericSocketUser):
                 coordinator_socket.connect((site_list[coordinator_id].hostname, site_list[coordinator_id].port))
                 self.logger.info(f"Connecting to coordinator: {site_list[coordinator_id].hostname}.")
 
-                self.send_op(OpCode.TRANSACTION_STATUS, coordinator_socket)
-                tranasction_status = self.read_message(coordinator_socket)
+                self.logger.info(f"Spawning participant thread in the RECOVERY state.")
+                self.child_threads[transaction_id] = participate.TransactionParticipantThread(
+                    transaction_id=transaction_id,
+                    client_socket=coordinator_socket,
+                    **self.context
+                )
+                self.child_threads[transaction_id].state = participate.ParticipantStates.RECOVERY
+                self.child_threads[transaction_id].start()
 
+            else:
+                # Determine who the participants were in this transaction.
+                participant_ids = wal.get_participants_in(transaction_id)
+
+                self.logger.info(f"Spawning coordinator thread in the RECOVERY state.")
+                # TODO: FINISH
 
     def run(self) -> None:
         # Before starting, resolve any transactions that haven't been committed.
@@ -87,7 +99,7 @@ class _ServerDaemonThread(threading.Thread, GenericSocketUser):
                 )
                 self.child_threads[transaction_id].start()
 
-            elif requested_op == OpCode.RECONNECT_PARTICIPANT:
+            elif requested_op == OpCode.PREPARE_TO_COMMIT or requested_op == OpCode.ABORT_TRANSACTION:
                 # Parse the transaction ID from the message.
                 transaction_id = client_message[1]
                 if transaction_id not in self.child_threads.keys():
@@ -96,7 +108,7 @@ class _ServerDaemonThread(threading.Thread, GenericSocketUser):
 
                 # Connect a new socket to the transaction.
                 self.logger.info(f"Attaching new socket to participant thread from transaction {transaction_id}.")
-                self.child_threads[transaction_id].reassign_socket(client_socket)
+                self.child_threads[transaction_id].inject_socket(client_socket, client_message)
 
             else:
                 self.logger.warning("Unknown/unsupported operation received. Taking no action. ", client_message)
@@ -117,7 +129,8 @@ if __name__ == '__main__':
         hostname=c_args.hostname,
         node_port=manager_json['port'],
 
-        failure_time=manager_json['timeout-s'],
+        failure_time=manager_json['timeout'],
+        wait_time=manager_json['wait-period'],
         wal_file=manager_json['wal-file'],
         site_json=c_args.config_path + '/site.json',
 
