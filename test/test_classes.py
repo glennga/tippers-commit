@@ -157,8 +157,8 @@ class TestWriteAheadLogger(TestCase):
 
         self.assertEqual(wal_coordinator.get_role_in(transaction_id), WriteAheadLogger.Role.COORDINATOR)
         self.assertEqual(wal_participant.get_role_in(transaction_id), WriteAheadLogger.Role.PARTICIPANT)
-        self.assertFalse(wal_coordinator.is_transaction_active(transaction_id))
-        self.assertFalse(wal_participant.is_transaction_active(transaction_id))
+        self.assertFalse(wal_coordinator.is_transaction_prepared(transaction_id))
+        self.assertFalse(wal_participant.is_transaction_prepared(transaction_id))
 
         uncommitted_coordinator_transactions = wal_coordinator.get_uncommitted_transactions()
         uncommitted_participant_transactions = wal_participant.get_uncommitted_transactions()
@@ -279,5 +279,7 @@ class TestWriteAheadLogger(TestCase):
 
 
 if __name__ == "__main__":
+    import sys
+
     logging.basicConfig(stream=sys.stderr)
     unittest.main()

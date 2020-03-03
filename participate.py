@@ -4,19 +4,75 @@ import psycopg2
 import time
 
 from shared import *
+from typing import Any
 
 
 class ParticipantStates(IntEnum):
-    """ We define 6 states for a participant. """
-    INITIALIZATION = 0
-    OPERATIONAL = 1
-    PREPARED = 2
-    RECOVERY = 3
-    WAITING = 4
-    FINISHED = 5
+    """ We define 8 distinct states for a participant. """
+    INITIALIZE = 0
+    RECOVERY = 1
+    ACTIVE = 2
+    PREPARED = 3
+    ABORT = 4
+    WAITING = 5
+    COMMIT = 6
+    FINISHED = 7
 
 
 class TransactionParticipantThread(threading.Thread, GenericSocketUser):
+    """
+    A participant adheres to the FSM specification below.
+    --------------------------------------------------------------------------------------------------------------------
+    |    INITIALIZE    | A participant can only enter this state via instantiation (i.e. a call from the server daemon).
+    |                  | From this state, the participant must move to the ACTIVE state.
+    |------------------|-----------------------------------------------------------------------------------------------|
+    |     RECOVERY     | A participant can only enter this state by explicitly setting the state variable to RECOVERY.
+    |                  | This informs the participant that they should perform a "redo" action from the WAL. We will
+    |                  | then ask the coordinator the state of the transaction. Depending on the message from the
+    |                  | coordinator, a participant will transition to the COMMIT or the ABORT state. We are unable to
+    |                  | go directly to the ABORT state (i.e. skip the RECOVERY state), in order to maintain strictness.
+    |                  | We are also unable to move to the ACTIVE state, as the coordinator will have experienced a
+    |                  | socket error and will have had to abort the transaction altogether.
+    |------------------|-----------------------------------------------------------------------------------------------|
+    |      ACTIVE      | A participant can enter this state from the ACTIVE state or from the INITIALIZE state. Here,
+    |                  | insertions are made and acknowledgement messages are sent back to the coordinator informing the
+    |                  | success of the insertion itself (insertion-time constraint checking). If an insertion message
+    |                  | is given by the coordinator, we cycle back to the ACTIVE state. If a prepare message is given,
+    |                  | we send the commit to our RM and reply to the coordinator with our status, moving us to either
+    |                  | the ABORT state or the PREPARED state. If an abort message is given, we ABORT and reply to the
+    |                  | coordinator with an acknowledgement. If at any point these messages fail (i.e. a coordinator
+    |                  | error), we delegate this problem to the ABORT or PREPARED states.
+    |------------------|-----------------------------------------------------------------------------------------------|
+    |     PREPARED     | A participant can enter this state from the ACTIVE, WAITING, or PREPARED states. Upon
+    |                  | receiving a commit message from our coordinator, we move to the COMMIT state. Upon receiving an
+    |                  | abort message, we move to the ABORT state. If we experience a socket timeout/error while
+    |                  | waiting for a message, we move to the WAITING state. If we exit out of the WAITING state and
+    |                  | traverse back to here, we can possibly move from the PREPARED state back to the PREPARED state.
+    |------------------|-----------------------------------------------------------------------------------------------|
+    |      ABORT       | A participant can enter this state from the following states: RECOVERY, ACTIVE, PREPARED.
+    |                  | In ABORT, a participant will always perform an "undo" action from the WAL. If the
+    |                  | participant was previously in the RECOVERY state, the participant will move straight to the
+    |                  | FINISHED state. Otherwise, a participant will send an acknowledgement to the coordinator. If
+    |                  | this action times out or fails, we move to the WAITING state. Otherwise, we move to the
+    |                  | FINISHED state.
+    |------------------|-----------------------------------------------------------------------------------------------|
+    |     WAITING      | A participant can enter this state from the following states: PREPARED, ABORT, COMMIT-- if they
+    |                  | do not receive a commit or abort message without errors, or if they are unable to send an
+    |                  | acknowledgement without errors. In both cases, the participant will close the offending socket.
+    |                  | If we are waiting for a COMMIT or ABORT message, we will wait until a new socket is assigned
+    |                  | to us by the server daemon and request the decision. If we are waiting to send an
+    |                  | acknowledgement of an abort or commit, wait until a new socket is assigned to us and send the
+    |                  | acknowledgement. If this fails again, we cycle back to the WAITING state.
+    |------------------|-----------------------------------------------------------------------------------------------|
+    |      COMMIT      | A participant can enter this state from the following states: RECOVERY, PREPARED, ABORT.
+    |                  | Here, a completion log is written and persisted. Then, the log is flushed and an
+    |                  | acknowledgement is sent to the coordinator. If this fails, we move to the WAITING state.
+    |                  | Otherwise, we move to the FINISHED state.
+    |------------------|-----------------------------------------------------------------------------------------------|
+    |     FINISHED     | A participant can only enter this state from the COMMIT state or the ABORT state. This
+    |                  | represents the FSM sink. From here, the thread is killed.
+    --------------------------------------------------------------------------------------------------------------------
+    """
     logger = logging.getLogger(__qualname__)
 
     def __init__(self, transaction_id: bytes, client_socket: socket.socket, **context):
@@ -37,14 +93,137 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
         )
         self.conn.autocommit = False
 
-        # These are used when a socket fails.
-        self.socket.settimeout(context['failure_time'])
-        self.message_from_parent = None
+        # To enter the RECOVERY state instead, parent must explicitly change the state after instantiation.
+        self.state = ParticipantStates.INITIALIZE
+        self.previous_edge_property = None
+        self.is_socket_changed = False
 
-        # To enter the RECOVERY state instead, parent must explicitly change this after instantiation.
-        self.state = ParticipantStates.INITIALIZATION
+    def _send_edge(self, content) -> Any:
+        self.socket.settimeout(self.context['failure_time'])
 
-    def _abort_action(self):
+        if type(content) == OpCode:
+            if not self.send_op(content):
+                self.logger.warning("Unable to send request for transaction status. Moving to WAITING.")
+                self.previous_edge_property = content
+                self.state = ParticipantStates.WAITING
+                return None
+
+            coordinator_response = self.read_message()
+            if coordinator_response is None:
+                self.logger.warning("No reply from the coordinator about transaction status. Moving to WAITING.")
+                self.previous_edge_property = content
+                self.state = ParticipantStates.WAITING
+
+            return coordinator_response
+
+        elif type(content) == ResponseCode:
+            coordinator_send = self.send_response(content)
+            if not coordinator_send:
+                self.logger.warning("Unable to send response. Moving to WAITING.")
+                self.previous_edge_property = content
+                self.state = ParticipantStates.WAITING
+
+            return coordinator_send
+
+        else:
+            self.logger.error("Content must be either an OpCode or a ResponseCode.")
+            raise RuntimeError("Content must be either an OpCode or a ResponseCode.")
+
+    def _initialize_state(self):
+        self.wal.initialize_transaction(self.transaction_id, TransactionRole.PARTICIPANT)
+        self.state = ParticipantStates.ACTIVE
+
+    def _recovery_state(self):
+        """ Redo each INSERT from least to most recent, if we receive a COMMIT status from our coordinator. """
+        if self.wal.is_transaction_prepared(self.transaction_id):
+            self.logger.info("Re-performing all uncommitted statements from our WAL.")
+            for statement in self.wal.get_redo_for(self.transaction_id):
+                try:
+                    cur = self.conn.cursor()
+                    cur.execute(statement)
+                    self.logger.debug(f"{statement} successful.")
+
+                except Exception as e:
+                    # Ensure that the entire REDO is atomic. Assuming that errors caught are from partial REDOs.
+                    self.logger.warning("Exception caught, but ignoring: ", e)
+
+        else:
+            # If a transaction does not have a PREPARE record, we can safely abort.
+            self.state = ParticipantStates.ABORT
+            return
+
+        # Request the status of the transaction. Account for moving to the WAITING state.
+        coordinator_response = self._send_edge(OpCode.TRANSACTION_STATUS)
+        if coordinator_response is None:
+            return
+
+        self.logger.info("Moving the the next state: ", coordinator_response[0])
+        if coordinator_response[0] == ResponseCode.TRANSACTION_COMMITTED:
+            self.state = ParticipantStates.COMMIT
+        elif coordinator_response[0] == ResponseCode.TRANSACTION_ABORTED:
+            self.previous_state = ParticipantStates.RECOVERY
+            self.state = ParticipantStates.ABORT
+        else:
+            self.logger.error('Unknown response received. Ignoring. ', coordinator_response)
+
+    def _active_state(self):
+        client_message = self.read_message()
+        if client_message is None:
+            self.logger.warning("Socket error occurred while waiting / reading message. Moving to ABORT state.")
+            self.state = ParticipantStates.ABORT
+            return
+
+        requested_op = client_message[0]
+        if requested_op == OpCode.INSERT_FROM_COORDINATOR:
+            # We have been issued an INSERT from our coordinator.
+            statement = client_message[2]
+            if not self._execute_statement(statement):
+                self.logger.warning("Statement was not successfully executed. Moving to ABORT state.")
+                self.state = ParticipantStates.ABORT
+
+        elif requested_op == OpCode.PREPARE_TO_COMMIT:
+            # We have been asked to prepare to commit. Send the commit to our RM.
+            try:
+                self.logger.info("Flushing WAL to disk, then sending the COMMIT message to the RM.")
+                self.wal.flush_log()
+                self.conn.commit()
+
+                self.logger.info("RM has approved of COMMIT. Sending PREPARE back and moving to the PREPARE state.")
+                self.send_response(ResponseCode.PREPARED_FROM_PARTICIPANT)  # Ignore error here!
+                self.state = ParticipantStates.PREPARED
+
+            except Exception as e:
+                self.logger.warning("RM could not commit. Sending ABORT back. Exception message: ", e)
+                self.send_response(ResponseCode.ABORT_FROM_PARTICIPANT)  # Ignore error here!
+                self.state = ParticipantStates.ABORT
+
+        elif requested_op == OpCode.ABORT_TRANSACTION:
+            # We have been asked to ABORT. Move to the ABORT state.
+            self.send_response(ResponseCode.ABORT_FROM_PARTICIPANT)  # Ignore error here!
+            self.state = ParticipantStates.ABORT
+
+        else:
+            self.logger.warning('Unknown operation received. Ignoring. ', client_message)
+
+    def _prepared_state(self):
+        client_message = self.read_message()
+        if client_message is None:
+            self.logger.warning("Socket error occurred while waiting / reading message. Moving to WAITING state.")
+            self.state = ParticipantStates.WAITING
+            self.previous_edge_property = None
+            return
+
+        requested_op = client_message[0]
+        if requested_op == OpCode.COMMIT_TRANSACTION:
+            self.state = ParticipantStates.COMMIT
+        elif requested_op == OpCode.ABORT_TRANSACTION:
+            self.state = ParticipantStates.ABORT
+        elif requested_op == OpCode.PREPARE_TO_COMMIT:
+            self.state = ParticipantStates.PREPARED
+        else:
+            self.logger.warning('Unknown operation received. Ignoring. ', client_message)
+
+    def _abort_state(self):
         """ Undo each INSERT from most to least recent. """
         self.logger.info("Rolling back all uncommitted statements from our WAL.")
         for statement in self.wal.get_undo_for(self.transaction_id):
@@ -54,141 +233,67 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
                 self.logger.debug(f"{statement} successful.")
 
             except Exception as e:
-                self.logger.fatal("Exception caught. Exiting now. Database is in a corrupted state!", e)
-                self.state = ParticipantStates.FINISHED
-                return
+                # Ensure that the entire REDO is atomic. Assuming that errors caught are from partial REDOs.
+                self.logger.warning("Exception caught, but ignoring: ", e)
 
-        # Commit this work to the RM.
-        self.state = ParticipantStates.FINISHED
-        self.conn.commit()
+        if self.previous_state == ParticipantStates.RECOVERY:
+            # If our previous state was RECOVERY, then we do not need to ask the coordinator again for the status.
+            self.state = ParticipantStates.FINISHED
+            return
+
+        coordinator_response = self._send_edge(ResponseCode.ACKNOWLEDGE_END)
+        if coordinator_response is None:
+            self.logger.warning("Unable to send acknowledgement to coordinator. Moving to WAITING.")
+        else:
+            self.close()  # Release our resources.
+            self.conn.commit()
+            self.conn.close()
+            self.state = ParticipantStates.FINISHED
 
     def _waiting_state(self):
-        """ Close our socket and wait for our parent thread to attach a new connection. """
-        while self.message_from_parent is None:
+        self.socket.close()  # We assume this socket to be dead.
+        while not self.is_socket_changed:
             time.sleep(self.context['wait_time'])
         self.logger.info("Moving out of the WAITING state.")
 
-        # From the WAITING state, we can only move to PREPARED or FINISHED state if we are told to abort.
-        if self.message_from_parent[0] == OpCode.PREPARE_TO_COMMIT:
-            self.logger.info("Moving to the PREPARE state.")
-            self._prepared_state(self.message_from_parent)
+        if self.previous_edge_property is not None:
+            # Repeat the action which lead us to the WAITING state.
+            coordinator_response = self._send_edge(self.previous_edge_property)
+            if coordinator_response is None or not coordinator_response:
+                pass  # We have failed in the WAITING state. Looping back.
 
-        elif self.message_from_parent[0] == OpCode.ABORT_TRANSACTION:
-            self.logger.info("Coordinator has informed us that we must ABORT.")
-            self._abort_action()
-            self.state = ParticipantStates.FINISHED
-
-        else:
-            self.logger.warning("Unknown operation received. Ignoring and moving to FINISHED state.")
-            self.state = ParticipantStates.FINISHED
-
-        self.message_from_parent = None
-
-    def _recovery_state(self):
-        """ Redo each INSERT from least to most recent, if we receive a COMMIT status from our coordinator.  """
-        self.send_op(OpCode.TRANSACTION_STATUS)
-        coordinator_response = self.read_message()
-
-        if coordinator_response[0] == ResponseCode.TRANSACTION_COMMITTED:
-            self.logger.info("Re-performing all uncommitted statements from our WAL.")
-            for statement in self.wal.get_redo_for(self.transaction_id):
-                try:
-                    cur = self.conn.cursor()
-                    cur.execute(statement)
-                    self.logger.debug(f"{statement} successful.")
-
-                except Exception as e:
-                    self.logger.fatal("Exception caught. Exiting now. Database is in a corrupted state!", e)
-                    sys.exit(0)
-
-            # Commit this work to the RM.
-            self.conn.commit()
-
-        elif coordinator_response[0] == ResponseCode.TRANSACTION_ABORTED:
-            self._abort_action()
-            self.state = ParticipantStates.FINISHED
-
-        else:
-            self.logger.error('Unknown operation received. Ignoring. ', coordinator_response)
-
-    def _operational_state(self, client_message: List):
-        requested_op = client_message[0]
-        if requested_op == OpCode.INSERT_FROM_COORDINATOR:
-            # We have been issued an INSERT from our coordinator.
-            statement = client_message[2]
-            if not self.execute_statement(statement):
-                self.state = ParticipantStates.WAITING
-
-        elif requested_op == OpCode.PREPARE_TO_COMMIT:
-            # We have been asked to prepare to commit. Send the commit to our RM.
-            try:
-                self.logger.info("Flushing WAL to disk, then sending the COMMIT message to the RM.")
-                self.wal.flush_log()
+            elif coordinator_response:
+                self.close()  # Release our resources.
                 self.conn.commit()
+                self.conn.close()
+                self.state = ParticipantStates.FINISHED
 
-                self.logger.info("RM has approved of COMMIT. Sending PREPARE back to coordinator.")
-                is_send_success = self.send_response(ResponseCode.PREPARED_FROM_PARTICIPANT)
-                self.state = ParticipantStates.WAITING if not is_send_success else ParticipantStates.PREPARED
+            else:
+                requested_op = coordinator_response[0]
+                if requested_op == OpCode.COMMIT_TRANSACTION:
+                    self.state = ParticipantStates.COMMIT
+                elif requested_op == OpCode.ABORT_TRANSACTION:
+                    self.state = ParticipantStates.ABORT
 
-            except Exception as e:
-                is_send_success = self.send_response(ResponseCode.ABORT_FROM_PARTICIPANT)
-                self.logger.warning("RM could not commit. Sending ABORT back to coordinator.")
-                self.logger.warning("Exception message: ", e)
+        else:  # We can only move to PREPARED or to FINISHED.
+            self.state = ParticipantStates.PREPARED
 
-                if is_send_success:
-                    self._abort_action()
-                self.state = ParticipantStates.WAITING if not is_send_success else ParticipantStates.FINISHED
+    def _commit_state(self):
+        self.logger.info("Logging COMMIT and flushing log to disk. Sending ACK to coordinator.")
+        self.wal.log_commit_of(self.transaction_id)
+        self.wal.flush_log()
 
-        elif requested_op == OpCode.ABORT_TRANSACTION:
-            # We have been asked to ABORT. Flush our logs to disk, rollback, and reply with an ACK.
-            self.logger.info('Flushing the WAL to disk.')
-            self.wal.flush_log()
-            self._abort_action()
-            self.conn.close()
-
-            # Log ABORT to WAL, and close.
-            self.wal.log_abort_of(self.transaction_id)
-            self.wal.close()
-
-            self.logger.info('Acknowledging ABORT. Sending ACK back to the coordinator.')
-            self.state = ParticipantStates.WAITING if not self.send_response(
-                ResponseCode.ACKNOWLEDGE_END) else ParticipantStates.FINISHED
+        if not self._send_edge(ResponseCode.ACKNOWLEDGE_END):
+            return  # Coordinator did not acknowledge. Move to WAITING state.
 
         else:
-            self.logger.warning('Unknown operation received. Ignoring. ', client_message)
-
-    def _prepared_state(self, client_message: List):
-        requested_op = client_message[0]
-        if requested_op == OpCode.COMMIT_FROM_COORDINATOR:
-            # We have been asked to commit. Write "COMPLETION" to our log and reply with an ACK.
-            self.wal.log_commit_of(self.transaction_id)
+            self.close()  # Release our resources.
+            self.conn.commit()
             self.conn.close()
-            self.wal.close()
+            self.state = ParticipantStates.FINISHED
 
-            self.state = ParticipantStates.WAITING if not self.send_response(
-                ResponseCode.ACKNOWLEDGE_END) else ParticipantStates.FINISHED
-            self.logger.info('Acknowledging COMMIT. Sent ACK back to the coordinator.')
-
-        elif requested_op == OpCode.ROLLBACK_FROM_COORDINATOR:
-            # We have been asked to rollback. Flush our logs to disk, rollback, and reply with an ACK.
-            self.logger.info('Flushing the WAL to disk.')
-            self.wal.flush_log()
-            self._abort_action()
-            self.conn.close()
-
-            # Log ABORT to WAL, and close.
-            self.wal.log_abort_of(self.transaction_id)
-            self.wal.close()
-
-            self.state = ParticipantStates.WAITING if not self.send_response(
-                ResponseCode.ACKNOWLEDGE_END) else ParticipantStates.FINISHED
-            self.logger.info('Acknowledging ABORT. Sending ACK back to the coordinator.')
-
-        else:
-            self.logger.warning('Unknown operation received. Ignoring. ', client_message)
-
-    def execute_statement(self, statement: str):
-        """ Execute the statement-- send the statement to the RM. If this fails, we kill ourselves. """
+    def _execute_statement(self, statement: str) -> bool:
+        """ Execute the statement-- send the statement to the RM. If this fails, we return false."""
         try:
             # Execute the statement.
             cur = self.conn.cursor()
@@ -198,56 +303,49 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
             self.wal.log_statement(self.transaction_id, statement)
             self.logger.debug(f"{statement} successful.")
             self.send_response(ResponseCode.OK)
+            return True
 
         except psycopg2.IntegrityError as e:
             self.logger.info("Integrity error caught. Exiting now: ", e)
-            self.send_response(ResponseCode.FAIL)
-            sys.exit(0)
+            return False
 
         except Exception as e:
             self.logger.error("Unknown exception caught. Exiting now: ", e)
-            self.send_response(ResponseCode.FAIL)
-            sys.exit(0)
+            return False
 
-    def inject_socket(self, client_socket: socket.socket, client_message: List):
+    def inject_socket(self, client_socket: socket.socket):
         """ Inject a new socket connection for our participant to use. """
         self.socket = client_socket
-        self.message_from_parent = client_message
+        self.is_socket_changed = True
 
     def run(self) -> None:
-        if self.state == ParticipantStates.RECOVERY:
-            # If specified by our parent thread, enter the recovery state.
-            self._recovery_state()
-            return
+        while self.state != ParticipantStates.FINISHED:
+            if self.state == ParticipantStates.INITIALIZE:
+                self.logger.info("Moving to INITIALIZE state.")
+                self._initialize_state()
 
-        # Otherwise, transition to the insert state.
-        self.state = ParticipantStates.OPERATIONAL
+            elif self.state == ParticipantStates.RECOVERY:
+                self.logger.info("Moving to RECOVERY state.")
+                self._recovery_state()
 
-        while True:
-            # Read the message from the client. Parse the OP code.
-            client_message = self.read_message()
-            requested_op = client_message[0]
-            message_transaction_id = client_message[1]
-
-            # Verify that we are working within the same transaction.
-            if message_transaction_id != self.transaction_id:
-                self.logger.fatal(f"Transaction ID mismatch! Expected {self.transaction_id}, but received "
-                                  f"{message_transaction_id}.")
-                continue
-
-            if requested_op == OpCode.NO_OP:
-                self.logger.info(f"NO-OP received. Taking no action. :-)")
-                continue
-
-            if self.state == ParticipantStates.OPERATIONAL:
-                self._operational_state(client_message)
+            elif self.state == ParticipantStates.ACTIVE:
+                self.logger.debug("Moving to ACTIVE state.")
+                self._active_state()
 
             elif self.state == ParticipantStates.PREPARED:
-                self._prepared_state(client_message)
+                self.logger.info("Moving to PREPARED state.")
+                self._prepared_state()
+
+            elif self.state == ParticipantStates.ABORT:
+                self.logger.info("Moving to ABORT state.")
+                self._abort_state()
 
             elif self.state == ParticipantStates.WAITING:
+                self.logger.info("Moving to WAITING state.")
                 self._waiting_state()
 
-            else:
-                self.logger.info(f"No longer in transitional state. Exiting now from {self.state}.")
-                return
+            elif self.state == ParticipantStates.COMMIT:
+                self.logger.info("Moving to COMMIT state.")
+                self._commit_state()
+
+        self.logger.info("Moving to FINISHED state. Exiting thread.")

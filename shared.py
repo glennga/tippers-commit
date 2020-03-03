@@ -3,7 +3,6 @@ import socket
 import logging
 import pickle
 import uuid
-import sys
 
 from enum import IntEnum
 from typing import List
@@ -45,6 +44,12 @@ class ResponseCode(IntEnum):
     # For recovery use when a TM fails.
     TRANSACTION_COMMITTED = 5
     TRANSACTION_ABORTED = 6
+
+
+class TransactionRole(IntEnum):
+    """ There exists two different types of roles: coordinator and participant. """
+    PARTICIPANT = 0
+    COORDINATOR = 1
 
 
 class GenericSocketUser(object):
@@ -145,6 +150,7 @@ class GenericSocketUser(object):
             return False
 
     def close(self, client_socket: socket.socket = None):
+        self.logger.info("'Close' called. Releasing socket(s).")
         if client_socket is not None:
             client_socket.close()
         self.socket.close()
@@ -152,11 +158,6 @@ class GenericSocketUser(object):
 
 class WriteAheadLogger(object):
     """ Class to standardize how WALs are formatted, written to, and read. """
-
-    class Role(IntEnum):
-        """ There exists two different types of WALs: coordinator and participant. """
-        PARTICIPANT = 0
-        COORDINATOR = 1
 
     @staticmethod
     def _transaction_id_to_bytes(transaction_id: str):
@@ -174,11 +175,11 @@ class WriteAheadLogger(object):
         """ Open our log file and create the tables if they do not exist. """
         pass
 
-    def initialize_transaction(self, transaction_id: bytes, role: Role) -> None:
+    def initialize_transaction(self, transaction_id: bytes, role: TransactionRole) -> None:
         """ Initialize a new transaction. We need to log our role in this transaction. """
         pass
 
-    def get_role_in(self, transaction_id: bytes) -> Role:
+    def get_role_in(self, transaction_id: bytes) -> TransactionRole:
         """ Return our role in the given transaction (either a coordinator or a participant). """
         pass
 
@@ -186,8 +187,8 @@ class WriteAheadLogger(object):
         """ Return the node-id of the coordinator associated with the given transaction. """
         pass
 
-    def is_transaction_active(self, transaction_id: bytes) -> bool:
-        """ Return true if the transaction has not been committed yet. False otherwise. """
+    def is_transaction_prepared(self, transaction_id: bytes) -> bool:
+        """ Return true if we (a participant) have prepared to commit. False otherwise. """
         pass
 
     def add_participant(self, transaction_id: bytes, node_id: int) -> None:
