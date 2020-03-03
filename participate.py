@@ -21,14 +21,14 @@ class ParticipantStates(IntEnum):
 
 class TransactionParticipantThread(threading.Thread, GenericSocketUser):
     """
-    A participant adheres to the FSM specification below.
+    A participant adheres to the FSM specification below. undo
     --------------------------------------------------------------------------------------------------------------------
     |    INITIALIZE    | A participant can only enter this state via instantiation (i.e. a call from the server daemon).
     |                  | From this state, the participant must move to the ACTIVE state.
     |------------------|-----------------------------------------------------------------------------------------------|
     |     RECOVERY     | A participant can only enter this state by explicitly setting the state variable to RECOVERY.
-    |                  | This informs the participant that they should perform a "redo" action from the WAL. We will
-    |                  | then ask the coordinator the state of the transaction. Depending on the message from the
+    |                  | This informs the participant that they should perform a "undo -> redo" action from the WAL. We
+    |                  | will then ask the coordinator the state of the transaction. Depending on the message from the
     |                  | coordinator, a participant will transition to the COMMIT or the ABORT state. We are unable to
     |                  | go directly to the ABORT state (i.e. skip the RECOVERY state), in order to maintain strictness.
     |                  | We are also unable to move to the ACTIVE state, as the coordinator will have experienced a
@@ -136,6 +136,16 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
     def _recovery_state(self):
         """ Redo each INSERT from least to most recent, if we receive a COMMIT status from our coordinator. """
         if self.wal.is_transaction_prepared(self.transaction_id):
+            self.logger.info("Undoing all uncommitted statements from the WAL.")
+            for statement in self.wal.get_undo_for(self.transaction_id):
+                try:
+                    cur = self.conn.cursor()
+                    cur.execute(statement)
+                    self.logger.debug(f"{statement} successful.")
+
+                except Exception as e:  # We should never reach here.
+                    self.logger.fatal("Exception caught! Fatal! ", e)
+
             self.logger.info("Re-performing all uncommitted statements from our WAL.")
             for statement in self.wal.get_redo_for(self.transaction_id):
                 try:
@@ -143,9 +153,8 @@ class TransactionParticipantThread(threading.Thread, GenericSocketUser):
                     cur.execute(statement)
                     self.logger.debug(f"{statement} successful.")
 
-                except Exception as e:
-                    # Ensure that the entire REDO is atomic. Assuming that errors caught are from partial REDOs.
-                    self.logger.warning("Exception caught, but ignoring: ", e)
+                except Exception as e:  # We should never reach here.
+                    self.logger.fatal("Exception caught! Fatal! ", e)
 
         else:
             # If a transaction does not have a PREPARE record, we can safely abort.

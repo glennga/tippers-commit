@@ -90,10 +90,8 @@ class _TransactionGenerator(GenericSocketUser):
                     break
 
                 timestamp = self._convert_timestamp(record.split(",")[-2])
-
                 sensor_id = record.split(",")
                 sensor_id = sensor_id[-1]
-
                 sensor_id = sensor_id.replace(")", "")
                 sensor_id = sensor_id.replace(";", "")
                 sensor_id = sensor_id.replace("'", "")
