@@ -175,9 +175,10 @@ class WriteAheadLogger(object):
         """ Create the tables required for our log file, if they do not already exist. """
 
 
-        table_1 = "CREATE TABLE IF NOT EXISTS PROTOCOL_DB (tr_id varchar(255) PRIMARY KEY, state varchar(255), location int)"
-        table_2 = "CREATE TABLE IF NOT EXISTS QUERY_DB (tr_id varchar(255), statement text, order int)"
+        table_1 = "CREATE TABLE IF NOT EXISTS PROTOCOL_DB (tr_id varchar(255) PRIMARY KEY, location int)"
+        table_2 = "CREATE TABLE IF NOT EXISTS QUERY_DB (tr_id varchar(255), statement text)"
         table_3 = "CREATE TABLE IF NOT EXISTS COORDINATOR_DB (tr_id varchar(255) PRIMARY KEY , coordinator int, coord_flag int)"
+        table_4 = "CREATE TABLE IF NOT EXISTS STATE_TABLE (tr_id varchar(255), STATE VARCHAR(100))"
 
         cur = self.conn.cursor()
         
@@ -197,13 +198,22 @@ class WriteAheadLogger(object):
         self._create_tables()
 
         
-    ########### Does initialize_transaction have a coordinator as input????? ############
-    def initialize_transaction(self, transaction_id: bytes, role: TransactionRole) -> None:
+   
+    def initialize_transaction(self, transaction_id: bytes, role: TransactionRole, node_id: int) -> None:
         """ Initialize a new transaction. We need to log our role in this transaction. """
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO STATE_TABLE VALUES('" + tr_id + "', I)"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        
         pass
 
 
-    ########### Make sure casting to ENUM correctly ###############    
+   
     def get_role_in(self, transaction_id: bytes) -> TransactionRole:
         """ Return our role in the given transaction (either a coordinator or a participant). """
         tr_id = self._transaction_id_to_str(transaction_id)
@@ -220,10 +230,10 @@ class WriteAheadLogger(object):
 
         else:
             if result_set[2] == 0:
-                return ENUM(0)
+                return TransactionRole.PARTICIPANT
 
             else:
-                return ENUM(1)
+                return TransactionRole.COORDINATOR
 
 
   
@@ -247,43 +257,83 @@ class WriteAheadLogger(object):
 
     def is_transaction_prepared(self, transaction_id: bytes) -> bool:
         """ Return true if we (a participant) have prepared to commit. False otherwise. """
-        pass
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "SELECT state FROM STATE_TABLE WHERE tr_id = '" + tr_id + "'"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        result_set = cur.fetchone()
+        if len(result_set) < 1:
+            return False
+
+        else:
+            if result_set[0] = "P":
+                return True
+
+
+        return False
 
     def add_participant(self, transaction_id: bytes, node_id: int) -> None:
         """ Add a new participant to the transaction. This operation should only be called by a coordinator. """
 
         tr_id = self._transaction_id_to_str(transaction_id)
 
-        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', I, " + str(node_id) + ")"
+        query = "INSERT INTO STATE_TABLE VALUES('" + tr_id + "', 'I') "
 
         cur = self.conn.cursor()
         cur.execute(query)
 
-        self.flush_log()
+
 
     
         
-
+    ## also setting transactino to initiated in statetable
     def add_coordinator(self, transaction_id: bytes, node_id: int, self_flag: int) -> None:
         """ Add coordinator to coordinator db"""
         tr_id = self._transaction_id_to_str(transaction_id)
 
-        query = "INSERT INTO COORDINATOR_DB VALUES('" + tr_id + "', '" + str(node_id) + "', '" + str(self_flag) +"')"
+        query1 = "INSERT INTO COORDINATOR_DB VALUES('" + tr_id + "', '" + str(node_id) + "', '" + str(self_flag) +"')"
+        query2 = "INSERT INTO STATE_TABLE VALUES ('" + tr_id  + "', 'I')"
 
         cur = self.conn.cursor()
         cur.execute(query)
 
-        self.flush_log()
+
 
         
-
+    
     def get_uncommitted_transactions(self) -> List[bytes]:
         """ Return a list of transactions that have not been committed yet. """
-        pass
+        #Also returning transactionst that are not done
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "SELECT tr_id FROM STATE_TABLE WHERE state = 'I' or state = 'P'"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        result_set = query.fetchall()
+
+        return [self._transaction_id_to_bytes(i) for i in result_set]
+
+    
+
+
+    def prepare_transaction(self, transaction_id: bytes):
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', 'P')" 
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+        
 
 
 
-    #### Return type int but def has bytes???###################
     def get_participants_in(self, transaction_id: bytes) -> List[int]:
         """ Return a list of node IDs that correspond to participants in the given transaction. """
         tr_id = self._transaction_id_to_str(transaction_id)
@@ -310,17 +360,44 @@ class WriteAheadLogger(object):
         cur = self.conn.cursor()
         cur.execute(cur)
 
-        self._flush_log()
 
 
-    ######## Should we add another table (tr_id, state) #############
+
     def log_commit_of(self, transaction_id: bytes):
         """ Log that the given transaction has committed. """
-        pass
+        ## Update state table to commit (If coordinator)
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', 'C')" 
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+        
+        
+        
 
     def log_abort_of(self, transaction_id: bytes):
         """ Log that the given transaction has been aborted. """
-        pass
+        ## Update state table to abort (If coordinator)
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', 'A')" 
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+        
+
+
+    def log_completion_of(self, transaction_id: bytes):
+        #UPDATE STATE TABLE TO D
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', 'D')" 
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+        
+    
 
     def flush_log(self) -> None:
         """ Persist the log file to disk. """
@@ -387,5 +464,5 @@ class WriteAheadLogger(object):
 
     def close(self):
         """ Close the resource. """
-
+        self.flush_log()
         self.conn.close()
