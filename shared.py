@@ -3,6 +3,8 @@ import socket
 import logging
 import pickle
 import uuid
+import sqlite3
+
 
 from enum import IntEnum
 from typing import List
@@ -167,25 +169,81 @@ class WriteAheadLogger(object):
     def _transaction_id_to_str(transaction_id: bytes):
         return str(uuid.UUID(bytes=transaction_id))
 
+
+    ############# TEMP SCHEMA WILL MODIFY LATER ######################    
     def _create_tables(self) -> None:
         """ Create the tables required for our log file, if they do not already exist. """
-        pass
+
+
+        table_1 = "CREATE TABLE IF NOT EXISTS PROTOCOL_DB (tr_id varchar(255) PRIMARY KEY, state varchar(255), location int)"
+        table_2 = "CREATE TABLE IF NOT EXISTS QUERY_DB (tr_id varchar(255), statement text, order int)"
+        table_3 = "CREATE TABLE IF NOT EXISTS COORDINATOR_DB (tr_id varchar(255) PRIMARY KEY , coordinator int, coord_flag int)"
+
+        cur = self.conn.cursor()
+        
+        cur.execute(table_1)
+        cur.execute(table_2)
+        cur.execute(table_3)
+
+        
+        
+        
+        
 
     def __init__(self, wal_file: str):
         """ Open our log file and create the tables if they do not exist. """
+        self.conn = sqlite3.connect(wal_file)
+
+        self._create_tables()
+
         pass
 
     def initialize_transaction(self, transaction_id: bytes, role: TransactionRole) -> None:
         """ Initialize a new transaction. We need to log our role in this transaction. """
         pass
 
+
+    ########### Make sure casting to ENUM correctly ###############    
     def get_role_in(self, transaction_id: bytes) -> TransactionRole:
         """ Return our role in the given transaction (either a coordinator or a participant). """
-        pass
+        tr_id = self._transaction_id_to_str(transaction_id)
 
+        cur = self.conn.cursor()
+
+        query = "SELECT FROM COORDINATOR_DB WHERE tr_id = '" + tr_id + "'"
+        cur.execute(query)
+
+        result_set = cur.fetchone()
+
+        if len(result_set) <= 0:
+            return -1
+
+        else:
+            if result_set[2] == 0:
+                return ENUM(0)
+
+            else:
+                return ENUM(1)
+
+
+  
     def get_coordinator_for(self, transaction_id: bytes) -> int:
         """ Return the node-id of the coordinator associated with the given transaction. """
-        pass
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+        query = "SELECT coordinator FROM COORDINATOR_DB WHERE tr_id = '" + tr_id + "'"
+
+        cur = self.conn.cursor()
+
+        cur.execute(query)
+        result_set = cur.fetchone()
+
+        if len(result_set < 1):
+            return -1
+
+        else:
+            return result_set
+        
 
     def is_transaction_prepared(self, transaction_id: bytes) -> bool:
         """ Return true if we (a participant) have prepared to commit. False otherwise. """
@@ -193,7 +251,31 @@ class WriteAheadLogger(object):
 
     def add_participant(self, transaction_id: bytes, node_id: int) -> None:
         """ Add a new participant to the transaction. This operation should only be called by a coordinator. """
-        pass
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', I, " + str(node_id) + ")"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        self._flush_log()
+
+    
+        
+
+    def add_coordinator(self, transaction_id: bytes, node_id: int, self_flag: int) -> None:
+        """ Add coordinator to coordinator db"""
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO COORDINATOR_DB VALUES('" + tr_id + "', '" + str(node_id) + "', '" + str(self_flag) +"')"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        self._flush_log()
+
+        
 
     def get_uncommitted_transactions(self) -> List[bytes]:
         """ Return a list of transactions that have not been committed yet. """
@@ -205,7 +287,14 @@ class WriteAheadLogger(object):
 
     def log_statement(self, transaction_id: bytes, statement: str) -> None:
         """ Record the given statement with the given transaction. """
-        pass
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+        query = "INSERT INTO QUERY_DB (tr_id, statement) VALUES ('" + tr_id + "', '" + statement + "')"
+
+        cur = self.conn.cursor()
+        cur.execute(cur)
+
+        self._flush_log()
 
     def log_commit_of(self, transaction_id: bytes):
         """ Log that the given transaction has committed. """
@@ -217,7 +306,7 @@ class WriteAheadLogger(object):
 
     def flush_log(self) -> None:
         """ Persist the log file to disk. """
-        pass
+        self.conn.commit()
 
     def get_redo_for(self, transaction_id: bytes) -> List[str]:
         """ Get a list of statements to redo a given transaction. """
@@ -229,4 +318,5 @@ class WriteAheadLogger(object):
 
     def close(self):
         """ Close the resource. """
-        pass
+
+        self.conn.close()
