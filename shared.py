@@ -196,8 +196,8 @@ class WriteAheadLogger(object):
 
         self._create_tables()
 
-        pass
-
+        
+    ########### Does initialize_transaction have a coordinator as input????? ############
     def initialize_transaction(self, transaction_id: bytes, role: TransactionRole) -> None:
         """ Initialize a new transaction. We need to log our role in this transaction. """
         pass
@@ -259,7 +259,7 @@ class WriteAheadLogger(object):
         cur = self.conn.cursor()
         cur.execute(query)
 
-        self._flush_log()
+        self.flush_log()
 
     
         
@@ -273,7 +273,7 @@ class WriteAheadLogger(object):
         cur = self.conn.cursor()
         cur.execute(query)
 
-        self._flush_log()
+        self.flush_log()
 
         
 
@@ -281,10 +281,26 @@ class WriteAheadLogger(object):
         """ Return a list of transactions that have not been committed yet. """
         pass
 
+
+
+    #### Return type int but def has bytes???###################
     def get_participants_in(self, transaction_id: bytes) -> List[int]:
         """ Return a list of node IDs that correspond to participants in the given transaction. """
-        pass
+        tr_id = self._transaction_id_to_str(transaction_id)
 
+        query = "SELECT location from PROTOCOL_DB WHERE tr_id = '" + tr_id + "'"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        result_set = cur.fetchall()
+        
+        return list(result_set)
+
+
+
+
+        
     def log_statement(self, transaction_id: bytes, statement: str) -> None:
         """ Record the given statement with the given transaction. """
 
@@ -296,6 +312,8 @@ class WriteAheadLogger(object):
 
         self._flush_log()
 
+
+    ######## Should we add another table (tr_id, state) #############
     def log_commit_of(self, transaction_id: bytes):
         """ Log that the given transaction has committed. """
         pass
@@ -310,11 +328,62 @@ class WriteAheadLogger(object):
 
     def get_redo_for(self, transaction_id: bytes) -> List[str]:
         """ Get a list of statements to redo a given transaction. """
-        pass
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "SELECT statement from QUERY_DB WHERE tr_id = '" + tr_id + "' ORDER BY order;"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        result_set = [str(i) fo i in list(cur.fetchall())]
+
+        return result_set
+
+
+
+    def _get_table_name(self, statement):
+        statement_split_by_into = statement.split("into")
+        statement_split_by_values = statement_split_by_into[1].split("values")
+
+        table_name = statement_split_by_values[0]
+        table_name = table_name.replace(' ', "")
+
+        return table_name
+
+
+    def _get_insert_id(self, statement):
+        #Split by (
+        #split by ,
+        #output res[0]
+        first_split = statement.split("(")
+        second_split = first_split[1].split(",")
+
+        return second_split[0]
+
+    
+
+    ### Make sure all ddl files are sorted lowercase, SQL SAFE UPDATES = 0######    
+    def _get_inverse_statement(self, statement):
+        table_name = self._get_table_name(statement)
+
+        insert_id = self._get_insert_id(statement)
+        
+        delte_query = "DELETE FROM " + table_name + "WHERE id = " + insert_id
+
+        return delete_query
+        
+
 
     def get_undo_for(self, transaction_id: bytes) -> List[str]:
         """ Get a list of statements to undo a given transaction. """
-        pass
+
+        statements = self.get_redo_for(self, transaction_id)[::-1] ## Undo in reverse chronological order
+
+        undo_statements = []
+        for statement in statements:
+            undo_statement.append(self._get_inverse_statement, statement)
+
+        return undo_statements
 
     def close(self):
         """ Close the resource. """
