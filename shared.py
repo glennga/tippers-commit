@@ -3,6 +3,8 @@ import socket
 import logging
 import pickle
 import uuid
+import sqlite3
+
 
 from enum import IntEnum
 from typing import List
@@ -167,66 +169,300 @@ class WriteAheadLogger(object):
     def _transaction_id_to_str(transaction_id: bytes):
         return str(uuid.UUID(bytes=transaction_id))
 
+
+    ############# TEMP SCHEMA WILL MODIFY LATER ######################    
     def _create_tables(self) -> None:
         """ Create the tables required for our log file, if they do not already exist. """
-        pass
+
+
+        table_1 = "CREATE TABLE IF NOT EXISTS PROTOCOL_DB (tr_id varchar(255) PRIMARY KEY, location int)"
+        table_2 = "CREATE TABLE IF NOT EXISTS QUERY_DB (tr_id varchar(255), statement text)"
+        table_3 = "CREATE TABLE IF NOT EXISTS COORDINATOR_DB (tr_id varchar(255) PRIMARY KEY , coordinator int, coord_flag int)"
+        table_4 = "CREATE TABLE IF NOT EXISTS STATE_TABLE (tr_id varchar(255), STATE VARCHAR(100))"
+
+        cur = self.conn.cursor()
+        
+        cur.execute(table_1)
+        cur.execute(table_2)
+        cur.execute(table_3)
+
+        
+        
+        
+        
 
     def __init__(self, wal_file: str):
         """ Open our log file and create the tables if they do not exist. """
-        pass
+        self.conn = sqlite3.connect(wal_file)
 
-    def initialize_transaction(self, transaction_id: bytes, role: TransactionRole) -> None:
+        self._create_tables()
+
+        
+   
+    def initialize_transaction(self, transaction_id: bytes, role: TransactionRole, node_id: int) -> None:
         """ Initialize a new transaction. We need to log our role in this transaction. """
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO STATE_TABLE VALUES('" + tr_id + "', I)"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        
         pass
 
+
+   
     def get_role_in(self, transaction_id: bytes) -> TransactionRole:
         """ Return our role in the given transaction (either a coordinator or a participant). """
-        pass
+        tr_id = self._transaction_id_to_str(transaction_id)
 
+        cur = self.conn.cursor()
+
+        query = "SELECT FROM COORDINATOR_DB WHERE tr_id = '" + tr_id + "'"
+        cur.execute(query)
+
+        result_set = cur.fetchone()
+
+        if len(result_set) <= 0:
+            return -1
+
+        else:
+            if result_set[2] == 0:
+                return TransactionRole.PARTICIPANT
+
+            else:
+                return TransactionRole.COORDINATOR
+
+
+  
     def get_coordinator_for(self, transaction_id: bytes) -> int:
         """ Return the node-id of the coordinator associated with the given transaction. """
-        pass
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+        query = "SELECT coordinator FROM COORDINATOR_DB WHERE tr_id = '" + tr_id + "'"
+
+        cur = self.conn.cursor()
+
+        cur.execute(query)
+        result_set = cur.fetchone()
+
+        if len(result_set < 1):
+            return -1
+
+        else:
+            return result_set
+        
 
     def is_transaction_prepared(self, transaction_id: bytes) -> bool:
         """ Return true if we (a participant) have prepared to commit. False otherwise. """
-        pass
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "SELECT state FROM STATE_TABLE WHERE tr_id = '" + tr_id + "'"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        result_set = cur.fetchone()
+        if len(result_set) < 1:
+            return False
+
+        else:
+            if result_set[0] = "P":
+                return True
+
+
+        return False
 
     def add_participant(self, transaction_id: bytes, node_id: int) -> None:
         """ Add a new participant to the transaction. This operation should only be called by a coordinator. """
-        pass
 
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO STATE_TABLE VALUES('" + tr_id + "', 'I') "
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+
+
+    
+        
+    ## also setting transactino to initiated in statetable
+    def add_coordinator(self, transaction_id: bytes, node_id: int, self_flag: int) -> None:
+        """ Add coordinator to coordinator db"""
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query1 = "INSERT INTO COORDINATOR_DB VALUES('" + tr_id + "', '" + str(node_id) + "', '" + str(self_flag) +"')"
+        query2 = "INSERT INTO STATE_TABLE VALUES ('" + tr_id  + "', 'I')"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+
+
+        
+    
     def get_uncommitted_transactions(self) -> List[bytes]:
         """ Return a list of transactions that have not been committed yet. """
-        pass
+        #Also returning transactionst that are not done
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "SELECT tr_id FROM STATE_TABLE WHERE state = 'I' or state = 'P'"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        result_set = query.fetchall()
+
+        return [self._transaction_id_to_bytes(i) for i in result_set]
+
+    
+
+
+    def prepare_transaction(self, transaction_id: bytes):
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', 'P')" 
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+        
+
+
 
     def get_participants_in(self, transaction_id: bytes) -> List[int]:
         """ Return a list of node IDs that correspond to participants in the given transaction. """
-        pass
+        tr_id = self._transaction_id_to_str(transaction_id)
 
+        query = "SELECT location from PROTOCOL_DB WHERE tr_id = '" + tr_id + "'"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        result_set = cur.fetchall()
+        
+        return list(result_set)
+
+
+
+
+        
     def log_statement(self, transaction_id: bytes, statement: str) -> None:
         """ Record the given statement with the given transaction. """
-        pass
+
+        tr_id = self._transaction_id_to_str(transaction_id)
+        query = "INSERT INTO QUERY_DB (tr_id, statement) VALUES ('" + tr_id + "', '" + statement + "')"
+
+        cur = self.conn.cursor()
+        cur.execute(cur)
+
+
+
 
     def log_commit_of(self, transaction_id: bytes):
         """ Log that the given transaction has committed. """
-        pass
+        ## Update state table to commit (If coordinator)
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', 'C')" 
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+        
+        
+        
 
     def log_abort_of(self, transaction_id: bytes):
         """ Log that the given transaction has been aborted. """
-        pass
+        ## Update state table to abort (If coordinator)
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', 'A')" 
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+        
+
+
+    def log_completion_of(self, transaction_id: bytes):
+        #UPDATE STATE TABLE TO D
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "INSERT INTO PROTOCOL_DB VALUES('" + tr_id + "', 'D')" 
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+        
+    
 
     def flush_log(self) -> None:
         """ Persist the log file to disk. """
-        pass
+        self.conn.commit()
 
     def get_redo_for(self, transaction_id: bytes) -> List[str]:
         """ Get a list of statements to redo a given transaction. """
-        pass
+        tr_id = self._transaction_id_to_str(transaction_id)
+
+        query = "SELECT statement from QUERY_DB WHERE tr_id = '" + tr_id + "' ORDER BY order;"
+
+        cur = self.conn.cursor()
+        cur.execute(query)
+
+        result_set = [str(i) fo i in list(cur.fetchall())]
+
+        return result_set
+
+
+
+    def _get_table_name(self, statement):
+        statement_split_by_into = statement.split("into")
+        statement_split_by_values = statement_split_by_into[1].split("values")
+
+        table_name = statement_split_by_values[0]
+        table_name = table_name.replace(' ', "")
+
+        return table_name
+
+
+    def _get_insert_id(self, statement):
+        #Split by (
+        #split by ,
+        #output res[0]
+        first_split = statement.split("(")
+        second_split = first_split[1].split(",")
+
+        return second_split[0]
+
+    
+
+    ### Make sure all ddl files are sorted lowercase, SQL SAFE UPDATES = 0######    
+    def _get_inverse_statement(self, statement):
+        table_name = self._get_table_name(statement)
+
+        insert_id = self._get_insert_id(statement)
+        
+        delte_query = "DELETE FROM " + table_name + "WHERE id = " + insert_id
+
+        return delete_query
+        
+
 
     def get_undo_for(self, transaction_id: bytes) -> List[str]:
         """ Get a list of statements to undo a given transaction. """
-        pass
+
+        statements = self.get_redo_for(self, transaction_id)[::-1] ## Undo in reverse chronological order
+
+        undo_statements = []
+        for statement in statements:
+            undo_statement.append(self._get_inverse_statement, statement)
+
+        return undo_statements
 
     def close(self):
         """ Close the resource. """
-        pass
+        self.flush_log()
+        self.conn.close()
