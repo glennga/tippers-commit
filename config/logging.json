@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "disable_existing_loggers": true,
+  "formatters": {
+    "default": {
+      "class": "logging.Formatter",
+      "format": "[%(asctime)s | %(name)-35s | %(levelname)-8s] %(message)s"
+    }
+  },
+  "handlers": {
+    "consoleHandler": {
+      "class": "logging.StreamHandler",
+      "formatter": "default",
+      "level": "DEBUG",
+      "stream": "ext://sys.stderr"
+    },
+    "fileHandler": {
+      "class": "logging.FileHandler",
+      "filename": "/tmp/tippers.log",
+      "formatter": "default",
+      "level": "DEBUG"
+    }
+  },
+  "root": {
+    "level": "DEBUG",
+    "handlers": [
+      "consoleHandler"
+    ]
+  }
+}

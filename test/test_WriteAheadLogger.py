@@ -1,137 +1,10 @@
-import threading
 import unittest
 import os
 
-from unittest import TestCase
 from shared import *
 
 
-class TestGenericSocketUser(TestCase):
-    """ Verifies the class that allows processes to talk with one another. """
-    logger = logging.getLogger(__qualname__)
-    test_port = 51000
-
-    class _TestServer(threading.Thread, GenericSocketUser):
-        logger = logging.getLogger(__qualname__)
-
-        def __init__(self, port: int):
-            threading.Thread.__init__(self, daemon=True)
-            GenericSocketUser.__init__(self)
-            self.socket.bind((socket.gethostname(), port))
-            self.socket.listen(5)
-
-        def run(self) -> None:
-            client_socket, client_address = self.socket.accept()
-            self.logger.info(f"Connection accepted from {client_address}.")
-
-            client_message = self.read_message(client_socket)
-            self.logger.info(f"Message read from client: {client_message}.")
-
-            self.send_message(client_message[0], client_message[1:], client_socket)
-            self.logger.info("Sending same message back to client.")
-            client_socket.close()
-
-    class _TestFaultyServer(threading.Thread, GenericSocketUser):
-        logger = logging.getLogger(__qualname__)
-
-        def __init__(self, port: int):
-            threading.Thread.__init__(self, daemon=True)
-            GenericSocketUser.__init__(self)
-            self.socket.bind((socket.gethostname(), port))
-            self.socket.listen(5)
-
-        def run(self) -> None:
-            client_socket, client_address = self.socket.accept()
-            self.logger.info(f"Connection accepted from {client_address}.")
-            self.close(client_socket)
-
-    def test_message_transfer(self):
-        working_port = self.test_port
-        server = self._TestServer(working_port)
-        server.start()
-
-        client = GenericSocketUser()
-        client.socket.connect((socket.gethostname(), working_port))
-        self.logger.info(f"Connected w/ server at {(socket.gethostname(), working_port)}.")
-        status = client.send_message(OpCode.NO_OP, ['test'])
-        self.logger.info(f"Sent test message.")
-        self.assertTrue(status)
-
-        response = client.read_message()
-        self.logger.info(f"Response received.")
-        self.assertEqual(response, [OpCode.NO_OP, 'test'])
-
-        # Close our resources.
-        server.join()
-        client.socket.close()
-        server.socket.close()
-
-    def test_op_transfer(self):
-        working_port = self.test_port + 1
-        server = self._TestServer(working_port)
-        server.start()
-
-        client = GenericSocketUser()
-        client.socket.connect((socket.gethostname(), working_port))
-        self.logger.info(f"Connected w/ server at {(socket.gethostname(), working_port)}.")
-        client.send_op(OpCode.NO_OP)
-        self.logger.info(f"Sent test message.")
-
-        response = client.read_message()
-        self.logger.info(f"Response received.")
-        self.assertEqual(response, [OpCode.NO_OP])
-
-        # Close our resources.
-        server.join()
-        client.socket.close()
-        server.socket.close()
-
-    def test_response_transfer(self):
-        working_port = self.test_port + 2
-        server = self._TestServer(working_port)
-        server.start()
-
-        client = GenericSocketUser()
-        client.socket.connect((socket.gethostname(), working_port))
-        self.logger.info(f"Connected w/ server at {(socket.gethostname(), working_port)}.")
-        client.send_response(ResponseCode.OK)
-        self.logger.info(f"Sent test message.")
-
-        response = client.read_message()
-        self.logger.info(f"Response received.")
-        self.assertEqual(response, [ResponseCode.OK])
-
-        # Close our resources.
-        server.join()
-        client.socket.close()
-        server.socket.close()
-
-    def test_faulty_receive(self):
-        working_port = self.test_port + 4
-        server = self._TestFaultyServer(working_port)
-        server.start()
-
-        client = GenericSocketUser()
-        client.socket.connect((socket.gethostname(), working_port))
-        self.logger.info(f"Connected w/ server at {(socket.gethostname(), working_port)}.")
-        response = client.read_message()
-        self.assertIsNone(response)
-
-    def test_faulty_send(self):
-        working_port = self.test_port + 3
-        server = self._TestFaultyServer(working_port)
-        server.start()
-
-        client = GenericSocketUser()
-        client.socket.connect((socket.gethostname(), working_port))
-        self.logger.info(f"Connected w/ server at {(socket.gethostname(), working_port)}.")
-
-        status = client.send_response(ResponseCode.OK)
-        self.logger.info(f"Sent test message.")
-        self.assertFalse(status)
-
-
-class TestWriteAheadLogger(TestCase):
+class TestWriteAheadLogger(unittest.TestCase):
     """ Verifies the class that allows recovery to be possible. """
     logger = logging.getLogger(__qualname__)
     test_file = 'test_wal.log'
@@ -152,11 +25,11 @@ class TestWriteAheadLogger(TestCase):
 
         wal_coordinator = WriteAheadLogger('coordinator_' + self.test_file)
         wal_participant = WriteAheadLogger('participant_' + self.test_file)
-        wal_coordinator.initialize_transaction(transaction_id, WriteAheadLogger.Role.COORDINATOR)
-        wal_participant.initialize_transaction(transaction_id, WriteAheadLogger.Role.PARTICIPANT)
+        wal_coordinator.initialize_transaction(transaction_id, TransactionRole.COORDINATOR)
+        wal_participant.initialize_transaction(transaction_id, TransactionRole.PARTICIPANT)
 
-        self.assertEqual(wal_coordinator.get_role_in(transaction_id), WriteAheadLogger.Role.COORDINATOR)
-        self.assertEqual(wal_participant.get_role_in(transaction_id), WriteAheadLogger.Role.PARTICIPANT)
+        self.assertEqual(wal_coordinator.get_role_in(transaction_id), TransactionRole.COORDINATOR)
+        self.assertEqual(wal_participant.get_role_in(transaction_id), TransactionRole.PARTICIPANT)
         self.assertFalse(wal_coordinator.is_transaction_prepared(transaction_id))
         self.assertFalse(wal_participant.is_transaction_prepared(transaction_id))
 
@@ -180,7 +53,7 @@ class TestWriteAheadLogger(TestCase):
     def test_participant(self):
         transaction_id = uuid.uuid4().bytes
         wal_coordinator = WriteAheadLogger('coordinator_' + self.test_file)
-        wal_coordinator.initialize_transaction(transaction_id, WriteAheadLogger.Role.COORDINATOR)
+        wal_coordinator.initialize_transaction(transaction_id, TransactionRole.COORDINATOR)
 
         wal_coordinator.add_participant(transaction_id, 1)
         wal_coordinator.add_participant(transaction_id, 2)
@@ -197,8 +70,8 @@ class TestWriteAheadLogger(TestCase):
 
         wal_coordinator = WriteAheadLogger('coordinator_' + self.test_file)
         wal_participant = WriteAheadLogger('participant_' + self.test_file)
-        wal_coordinator.initialize_transaction(transaction_id, WriteAheadLogger.Role.COORDINATOR)
-        wal_participant.initialize_transaction(transaction_id, WriteAheadLogger.Role.PARTICIPANT)
+        wal_coordinator.initialize_transaction(transaction_id, TransactionRole.COORDINATOR)
+        wal_participant.initialize_transaction(transaction_id, TransactionRole.PARTICIPANT)
 
         statement_set = [
             """

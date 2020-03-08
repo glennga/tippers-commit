@@ -113,6 +113,9 @@ class _TransactionManagerThread(threading.Thread, GenericSocketUser):
             # Parse the transaction ID from the message.
             transaction_id = client_message[1]
 
+            # if transaction_id not in self.child_threads.keys():
+            # If the transaction
+
             # We are a part of a transaction that does not originate at this TM. Spawn a participant.
             self.logger.info(f"Reconnecting participant thread for {transaction_id}.")
             self.child_threads[transaction_id].inject_socket(client_socket)

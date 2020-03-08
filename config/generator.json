@@ -1,5 +1,5 @@
 {
-  "benchmark-file": "resources/xaa.workload",
+  "benchmark-file": "resources/test.workload",
   "coordinator-hostname": "hibiscus01",
   "coordinator-port": 50000,
   "time-delta": 300

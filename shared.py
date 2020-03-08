@@ -1,10 +1,6 @@
 """ This file contains all shared procedure / code / constants for this codebase. """
-import socket
-import logging
-import pickle
-import uuid
-import sqlite3
 
+import uuid
 
 from enum import IntEnum
 from typing import List
@@ -20,17 +16,18 @@ class OpCode(IntEnum):
     ABORT_TRANSACTION = 2
     COMMIT_TRANSACTION = 3
     INSERT_FROM_CLIENT = 4
+    DISCONNECT_FROM_CLIENT = 5
 
     # Between the coordinator and a participant.
-    INITIATE_PARTICIPANT = 5
-    INSERT_FROM_COORDINATOR = 6
-    PREPARE_TO_COMMIT = 7
-    COMMIT_FROM_COORDINATOR = 8
-    ROLLBACK_FROM_COORDINATOR = 9
+    INITIATE_PARTICIPANT = 6
+    INSERT_FROM_COORDINATOR = 7
+    PREPARE_TO_COMMIT = 8
+    COMMIT_FROM_COORDINATOR = 9
+    ROLLBACK_FROM_COORDINATOR = 10
 
     # For recovery use when a TM fails.
-    TRANSACTION_STATUS = 10
-    RECONNECT_PARTICIPANT = 11
+    TRANSACTION_STATUS = 11
+    RECONNECT_PARTICIPANT = 12
 
 
 class ResponseCode(IntEnum):
