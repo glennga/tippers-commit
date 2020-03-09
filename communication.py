@@ -2,6 +2,7 @@ import socket
 import logging
 import pickle
 
+from typing import List
 from shared import *
 
 # We maintain a module-level logger.

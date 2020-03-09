@@ -131,15 +131,21 @@ class TestWriteAheadLogger(unittest.TestCase):
     def test_participant(self):
         transaction_id = uuid.uuid4().bytes
         wal_coordinator = recovery.WriteAheadLogger('coordinator_' + self.test_file)
+        wal_participant = recovery.WriteAheadLogger('participant_' + self.test_file)
         wal_coordinator.initialize_transaction(transaction_id, TransactionRole.COORDINATOR)
+        wal_participant.initialize_transaction(transaction_id, TransactionRole.PARTICIPANT)
 
         wal_coordinator.add_participant(transaction_id, 1)
         wal_coordinator.add_participant(transaction_id, 2)
+        wal_participant.add_coordinator(transaction_id, 2)
 
         participants = wal_coordinator.get_participants_in(transaction_id)
         self.assertEqual(len(participants), 2)
         self.assertIn(1, participants)
         self.assertIn(2, participants)
+
+        coordinator = wal_participant.get_coordinator_for(transaction_id)
+        self.assertEqual(coordinator, 2)
 
         wal_coordinator.flush_log()
         time.sleep(0.5)

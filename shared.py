@@ -12,7 +12,7 @@ class OpCode(IntEnum):
     ABORT_TRANSACTION = 2
     COMMIT_TRANSACTION = 3
     INSERT_FROM_CLIENT = 4
-    DISCONNECT_FROM_CLIENT = 5
+    SHUTDOWN = 5
 
     # Between the coordinator and a participant.
     INITIATE_PARTICIPANT = 6
@@ -23,7 +23,6 @@ class OpCode(IntEnum):
 
     # For recovery use when a TM fails.
     TRANSACTION_STATUS = 11
-    RECONNECT_PARTICIPANT = 12
 
 
 class ResponseCode(IntEnum):

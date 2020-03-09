@@ -1,5 +1,6 @@
 """ This file contains all participant related functionality. """
 import communication
+import recovery
 import socket
 import logging
 import threading
@@ -84,7 +85,7 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
         threading.Thread.__init__(self, daemon=True)
         communication.GenericSocketUser.__init__(self)
 
-        self.wal = WriteAheadLogger(context['wal_file'])
+        self.wal = recovery.WriteAheadLogger(context['wal_file'])
         self.transaction_id = transaction_id
         self.socket = client_socket
         self.context = context
@@ -234,9 +235,9 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
             return
 
         requested_op = client_message[0]
-        if requested_op == OpCode.COMMIT_TRANSACTION:
+        if requested_op == OpCode.COMMIT_FROM_COORDINATOR:
             self.state = ParticipantStates.COMMIT
-        elif requested_op == OpCode.ABORT_TRANSACTION:
+        elif requested_op == OpCode.ROLLBACK_FROM_COORDINATOR:
             self.state = ParticipantStates.ABORT
         elif requested_op == OpCode.PREPARE_TO_COMMIT:
             self.state = ParticipantStates.PREPARED
@@ -303,9 +304,9 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
 
             else:
                 requested_op = coordinator_response[0]
-                if requested_op == OpCode.COMMIT_TRANSACTION:
+                if requested_op == OpCode.COMMIT_FROM_COORDINATOR:
                     self.state = ParticipantStates.COMMIT
-                elif requested_op == OpCode.ABORT_TRANSACTION:
+                elif requested_op == OpCode.ROLLBACK_FROM_COORDINATOR:
                     self.state = ParticipantStates.ABORT
 
         else:  # We can only move to PREPARED or to FINISHED.

@@ -1,13 +1,15 @@
 """ This file contains all coordinator related functionality. """
 import communication
+import recovery
 import logging
 import socket
 import threading
 import psycopg2
-import json
 import time
+import uuid
 
 from multiprocessing.dummy import Pool
+from typing import List
 from shared import *
 
 # We maintain a module-level logger.
@@ -87,7 +89,7 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
         threading.Thread.__init__(self, daemon=True)
         communication.GenericSocketUser.__init__(self)
 
-        self.wal = WriteAheadLogger(context['wal_file'])
+        self.wal = recovery.WriteAheadLogger(context['wal_file'])
         self.transaction_id = self._generate_transaction_id()
         self.socket = client_socket
         self.context = context
@@ -103,9 +105,7 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
         self.conn.autocommit = False
 
         # Initialize our site-list, which describes our cluster.
-        with open(context['site-json']) as site_config_file:
-            site_json = json.load(site_config_file)
-        self.site_list = site_json
+        self.site_list = self.context['site_json']
         logging.info('Coordinator is aware of site: ', self.site_list)
 
         # Identify which node we are in our "ring".
@@ -228,7 +228,7 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
         self.wal.log_abort_of(self.transaction_id)
         self.wal.flush_log()
 
-        self._final_multicast(OpCode.ABORT_TRANSACTION)
+        self._final_multicast(OpCode.ROLLBACK_FROM_COORDINATOR)
         if len(self.active_map) != 0:
             self.previous_state = CoordinatorStates.COMMIT
             self.state = CoordinatorStates.WAITING
@@ -241,7 +241,7 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
         self.wal.flush_log()
 
         # Broadcast this to all participants.
-        self._final_multicast(OpCode.COMMIT_TRANSACTION)
+        self._final_multicast(OpCode.COMMIT_FROM_COORDINATOR)
         if len(self.active_map) != 0:
             self.previous_state = CoordinatorStates.COMMIT
             self.state = CoordinatorStates.WAITING
@@ -250,8 +250,23 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
 
     def _waiting_state(self):
         while len(self.active_map) != 0:
-            self._final_multicast(OpCode.COMMIT_TRANSACTION if self.previous_state == CoordinatorStates.COMMIT else
-                                  OpCode.ABORT_TRANSACTION)
+            logger.info("Reconnecting disconnected participants.")
+
+            for participant_id in self.active_map.keys():
+                logging.info(f"Connecting to participant {participant_id}.")
+                working_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                working_site = self.site_list[participant_id]
+
+                try:
+                    self.active_map[participant_id] = working_socket
+                    working_socket.connect((working_site['hostname'], working_site['port']))
+
+                except Exception as e:  # Swallow exceptions here. We will attempt to connect at a later time.
+                    logger.error(f"Exception caught, but ignoring: {e}")
+
+            # Perform the multicast. Sockets will close upon failure.
+            self._final_multicast(OpCode.COMMIT_FROM_COORDINATOR if self.previous_state == CoordinatorStates.COMMIT else
+                                  OpCode.ROLLBACK_FROM_COORDINATOR)
             time.sleep(self.context['wait_time'])
 
         # All participants have acknowledged. Move to FINISHED.

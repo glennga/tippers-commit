@@ -119,12 +119,12 @@ class WriteAheadLogger(object):
             WHERE tr_id = ? AND tr_role = 1;
         """, (self._transaction_id_to_str(transaction_id),))
 
-        result_set = cur.fetchone()
-        if len(result_set < 1):
+        result_set = cur.fetchall()
+        if len(result_set) < 1:
             logger.fatal(f"Error: Transaction {transaction_id} does not exist in the log.")
             raise SystemError(f"Error: Transaction {transaction_id} does not exist in the log.")
 
-        return result_set[0]
+        return result_set[0][0]
 
     def get_uncommitted_transactions(self) -> List[Tuple[bytes, str]]:
         cur = self.conn.cursor()
