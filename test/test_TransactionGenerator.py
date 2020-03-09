@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class TestTransactionGenerator(unittest.TestCase):
     """ Verifies the class that submits transactions to our TM. We are testing from the TM side (non-invasive). """
-    test_port = 55511
+    test_port = 50000
 
     @staticmethod
     def _generator_wrapper(port):
@@ -24,7 +24,7 @@ class TestTransactionGenerator(unittest.TestCase):
             coordinator_hostname=socket.gethostname(),
             coordinator_port=port,
             benchmark_file="resources/test.workload",
-            time_delta=60000
+            time_delta=6000000
         )()
 
     def test_happy_path(self):
@@ -56,9 +56,13 @@ class TestTransactionGenerator(unittest.TestCase):
             elif generator_message[0] == OpCode.COMMIT_TRANSACTION:
                 logger.info(f"Sending COMMIT back to generator.")
                 manager_socket.send_response(ResponseCode.TRANSACTION_COMMITTED, generator_socket)
+                time.sleep(0.01)
+                generator_socket.close()
+                generator_socket, generator_address = manager_socket.socket.accept()
+                logger.info(f"Connection accepted from {generator_address}.")
 
-            elif generator_message[0] == OpCode.DISCONNECT_FROM_CLIENT:
-                self.assertEqual(len(transaction_id_set), 3083)
+            elif generator_message[0] == OpCode.SHUTDOWN:
+                self.assertEqual(len(transaction_id_set), 100)
                 generator_socket.close()
                 manager_socket.close()
                 return
@@ -89,8 +93,15 @@ class TestTransactionGenerator(unittest.TestCase):
                 manager_socket.send_message(OpCode.START_TRANSACTION, [transaction_id_set[-1]], generator_socket)
 
             elif generator_message[0] == OpCode.INSERT_FROM_CLIENT:
-                self.assertEqual(len(transaction_id_set), 1)
-                logger.info(f"Sending ACK back to generator.")
+                logger.info(f"Sending ABORT back to generator.")
+                manager_socket.send_response(ResponseCode.TRANSACTION_ABORTED, generator_socket)
+                time.sleep(0.01)
+                generator_socket.close()
+                generator_socket, generator_address = manager_socket.socket.accept()
+                logger.info(f"Connection accepted from {generator_address}.")
+
+            elif generator_message[0] == OpCode.SHUTDOWN:
+                self.assertEqual(len(transaction_id_set), 100)
                 generator_socket.close()
                 manager_socket.close()
                 return
@@ -127,9 +138,13 @@ class TestTransactionGenerator(unittest.TestCase):
             elif generator_message[0] == OpCode.COMMIT_TRANSACTION:
                 logger.info(f"Sending ABORT back to generator.")
                 manager_socket.send_response(ResponseCode.TRANSACTION_ABORTED, generator_socket)
+                time.sleep(0.01)
+                generator_socket.close()
+                generator_socket, generator_address = manager_socket.socket.accept()
+                logger.info(f"Connection accepted from {generator_address}.")
 
-            elif generator_message[0] == OpCode.DISCONNECT_FROM_CLIENT:
-                self.assertEqual(len(transaction_id_set), 3083)
+            elif generator_message[0] == OpCode.SHUTDOWN:
+                self.assertEqual(len(transaction_id_set), 100)
                 generator_socket.close()
                 manager_socket.close()
                 return

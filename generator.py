@@ -4,6 +4,7 @@ import logging.config
 import logging
 import argparse
 import json
+import socket
 import datetime
 import sys
 import time
@@ -16,8 +17,9 @@ logger = logging.getLogger(__name__)
 
 class _TransactionGenerator(communication.GenericSocketUser):
     def __init__(self, **context):
-        super().__init__()
+        self.is_socket_closed = False
         self.context = context
+        super().__init__()
 
     def _insert_statement(self, transaction_id: bytes, statement: str, hash_input: list) -> bool:
         """ Send the insertion to TM. Additionally, send as input the object to hash on (in our case, this is the
@@ -34,10 +36,17 @@ class _TransactionGenerator(communication.GenericSocketUser):
 
         reply_message = self.read_message()
         logger.debug(f"Received from transaction manager: {reply_message}")
-        return reply_message[0] == ResponseCode.OK
+        return reply_message is not None and reply_message[0] == ResponseCode.OK
 
     def _start_transaction(self) -> bytes:
         """ :return: The transaction ID. """
+        if self.is_socket_closed:
+            hostname, port = self.context['coordinator_hostname'], int(self.context['coordinator_port'])
+            logger.info(f"Socket is closed. Reconnecting to TM at {hostname} through port {port}.")
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((hostname, port))
+            self.is_socket_closed = False
+
         self.send_op(OpCode.START_TRANSACTION)
         transaction_id = self.read_message()
         logger.info(f"Starting transaction. Issued ID: {str(transaction_id)}")
@@ -47,14 +56,20 @@ class _TransactionGenerator(communication.GenericSocketUser):
         logger.info(f"Sending ABORT message to the transaction manager for {transaction_id}.")
         self.send_message(OpCode.ABORT_TRANSACTION, [transaction_id])
         logger.info(f"Received from transaction manager: {self.read_message()}")
+        self.is_socket_closed = True
+        self.socket.close()
 
     def _commit_transaction(self, transaction_id: bytes):
         logger.info(f"Sending COMMIT message to the transaction manager for {transaction_id}.")
         self.send_message(OpCode.COMMIT_TRANSACTION, [transaction_id])
         manager_response = self.read_message()
+        self.is_socket_closed = True
+        self.socket.close()
 
         if manager_response is None:
             logger.error(f"Connection w/ transaction manager has been lost. Transaction has aborted.")
+            self.is_socket_closed = True
+
         elif manager_response[0] == ResponseCode.TRANSACTION_COMMITTED:
             logger.info(f"Transaction {transaction_id} has been committed.")
         elif manager_response[0] == ResponseCode.TRANSACTION_ABORTED:
@@ -69,16 +84,27 @@ class _TransactionGenerator(communication.GenericSocketUser):
         timestamp = timestamp[0:10] + " " + timestamp[10:]
         return datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
 
-    def _process_transaction(self, insert_list: list):
+    def _perform_transaction(self, insert_list: list):
         transaction_id = self._start_transaction()
-
         for insert in insert_list:
-            response = self._insert_statement(transaction_id, insert[0], insert[1])
-            if not response:
-                self._abort_transaction(transaction_id)
+            if not self._insert_statement(transaction_id, insert[0], insert[1]):
+                self.socket.close()  # The abort is implicit here.
                 break
 
         self._commit_transaction(transaction_id)
+
+    def _shutdown_manager(self):
+        if self.is_socket_closed:
+            logger.info(f"Exception caught. Attempting to connect socket again before retry.")
+            hostname, port = self.context['coordinator_hostname'], int(self.context['coordinator_port'])
+            logger.info(f"Connecting to TM at {hostname} through port {port}.")
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((hostname, port))
+            self.is_socket_closed = False
+
+        self.send_op(OpCode.SHUTDOWN)
+        logger.info("Waiting 5 seconds for the TM to read our shutdown message.")
+        time.sleep(5)
 
     def __call__(self):
         hostname, port = self.context['coordinator_hostname'], int(self.context['coordinator_port'])
@@ -114,7 +140,7 @@ class _TransactionGenerator(communication.GenericSocketUser):
 
                 else:
                     for (k, v) in sensor_dict.items():
-                        self._process_transaction(v)
+                        self._perform_transaction(v)
 
                     cur_timestamp = cur_timestamp + datetime.timedelta(0, self.context['time_delta'])
                     sensor_dict = {}
@@ -125,12 +151,9 @@ class _TransactionGenerator(communication.GenericSocketUser):
 
         # Take care of the remaining items.
         for (k, v) in sensor_dict.items():
-            self._process_transaction(v)
+            self._perform_transaction(v)
 
-        self.send_op(OpCode.DISCONNECT_FROM_CLIENT)
-        logger.info("Waiting 5 seconds for the TM to read our disconnect message.")
-        time.sleep(5)
-
+        self._shutdown_manager()
         logger.info("Exiting generator.")
         file_r.close()
         self.close()

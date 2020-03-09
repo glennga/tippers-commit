@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 class GenericSocketUser(object):
     """ Class to standardize message send and receipt. """
-    # The first portion of a message, the length, is of fixed size.
+    # The first portion of a message, the length, is of fixed size. (2^8 maximum message length in bytes)
     MESSAGE_LENGTH_BYTE_SIZE = 8
 
     def __init__(self):
@@ -51,7 +51,7 @@ class GenericSocketUser(object):
             return received_message
 
         except Exception as e:
-            logger.error(f"Exception caught: {e}")
+            logger.warning(f"Exception caught: {e}")
             self.close(client_socket)
             return None
 
@@ -70,7 +70,7 @@ class GenericSocketUser(object):
             return True
 
         except Exception as e:
-            logger.error(f"Exception caught: {e}")
+            logger.warning(f"Exception caught: {e}")
             self.close(client_socket)
             return False
 
@@ -89,7 +89,7 @@ class GenericSocketUser(object):
             return True
 
         except Exception as e:
-            logger.error(f"Exception caught: {e}")
+            logger.warning(f"Exception caught: {e}")
             self.close(client_socket)
             return False
 
@@ -108,7 +108,7 @@ class GenericSocketUser(object):
             return True
 
         except Exception as e:
-            logger.error(f"Exception caught: {e}")
+            logger.warning(f"Exception caught: {e}")
             self.close(client_socket)
             return False
 
