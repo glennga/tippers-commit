@@ -86,7 +86,7 @@ class _TransactionManagerThread(threading.Thread, communication.GenericSocketUse
         logger.info(f"TM is aware of site: {self.site_list}")
 
         wal = self.state_factory.get_wal()
-        for transaction_id in wal.get_uncommitted_transactions():
+        for transaction_id, state in wal.get_uncommitted_transactions():
             logger.info(f"Working on uncommitted transaction {transaction_id}.")
             role = wal.get_role_in(transaction_id)
 
@@ -98,9 +98,14 @@ class _TransactionManagerThread(threading.Thread, communication.GenericSocketUse
                     (self.site_list[coordinator_id]['hostname'], self.site_list[coordinator_id]['port']), )
                 logger.info(f"Connecting to coordinator: {self.site_list[coordinator_id]['hostname']}.")
 
-                logger.info(f"Spawning participant thread in the RECOVERY state.")
                 participant_thread = self.state_factory.get_participant(transaction_id, coordinator_socket)
-                participant_thread.state = participate.ParticipantStates.RECOVERY
+                if state == "P":
+                    logger.info(f"Spawning participant thread in the RECOVERY state.")
+                    participant_thread.state = participate.ParticipantStates.RECOVERY
+                else:
+                    logger.info(f"Spawning participant thread in the ABORT state.")
+                    participant_thread.state = participate.ParticipantStates.ABORT
+
                 self.child_threads[transaction_id] = participant_thread
                 self.child_threads[transaction_id].start()
 

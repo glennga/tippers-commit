@@ -107,7 +107,7 @@ class WriteAheadLogger(object):
         cur.execute("""
             SELECT node_id
             FROM TRANSACTION_SITE_LOG
-            WHERE tr_id = ?;
+            WHERE tr_id = ? AND tr_role = 0;
         """, (self._transaction_id_to_str(transaction_id),))
         return [i[0] for i in cur.fetchall()]
 

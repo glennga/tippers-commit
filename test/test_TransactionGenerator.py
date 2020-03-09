@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class TestTransactionGenerator(unittest.TestCase):
     """ Verifies the class that submits transactions to our TM. We are testing from the TM side (non-invasive). """
-    test_port = 50000
+    test_port = 51000
 
     @staticmethod
     def _generator_wrapper(port):
