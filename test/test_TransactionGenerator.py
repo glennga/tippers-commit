@@ -1,11 +1,11 @@
-import threading
-import socket
-import logging
-import unittest
-import time
 import communication
+import threading
+import unittest
+import logging
+import socket
+import time
+import uuid
 
-from coordinate import TransactionCoordinatorThread
 from generator import _TransactionGenerator
 from shared import *
 
@@ -46,7 +46,7 @@ class TestTransactionGenerator(unittest.TestCase):
             logger.info(f"Received message: {generator_message} from generator.")
 
             if generator_message[0] == OpCode.START_TRANSACTION:
-                transaction_id_set.append(TransactionCoordinatorThread._generate_transaction_id())
+                transaction_id_set.append(str(uuid.uuid4()))
                 manager_socket.send_message(OpCode.START_TRANSACTION, [transaction_id_set[-1]], generator_socket)
 
             elif generator_message[0] == OpCode.INSERT_FROM_CLIENT:
@@ -89,7 +89,7 @@ class TestTransactionGenerator(unittest.TestCase):
             logger.info(f"Received message: {generator_message} from generator.")
 
             if generator_message[0] == OpCode.START_TRANSACTION:
-                transaction_id_set.append(TransactionCoordinatorThread._generate_transaction_id())
+                transaction_id_set.append(str(uuid.uuid4()))
                 manager_socket.send_message(OpCode.START_TRANSACTION, [transaction_id_set[-1]], generator_socket)
 
             elif generator_message[0] == OpCode.INSERT_FROM_CLIENT:
@@ -128,7 +128,7 @@ class TestTransactionGenerator(unittest.TestCase):
             logger.info(f"Received message: {generator_message} from generator.")
 
             if generator_message[0] == OpCode.START_TRANSACTION:
-                transaction_id_set.append(TransactionCoordinatorThread._generate_transaction_id())
+                transaction_id_set.append(str(uuid.uuid4()))
                 manager_socket.send_message(OpCode.START_TRANSACTION, [transaction_id_set[-1]], generator_socket)
 
             elif generator_message[0] == OpCode.INSERT_FROM_CLIENT:
