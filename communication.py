@@ -14,8 +14,8 @@ class GenericSocketUser(object):
     # The first portion of a message, the length, is of fixed size. (2^8 maximum message length in bytes)
     MESSAGE_LENGTH_BYTE_SIZE = 8
 
-    def __init__(self):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    def __init__(self, client_socket: socket.socket = None):
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) if client_socket is None else client_socket
 
     def read_message(self, client_socket: socket.socket = None):
         """ Read message_length bytes from the specified socket, and deserialize our message. """
@@ -53,7 +53,7 @@ class GenericSocketUser(object):
 
         except Exception as e:
             logger.warning(f"Exception caught: {e}")
-            self.close(client_socket)
+            self.close(working_socket)
             return None
 
     def send_message(self, op_code: OpCode, contents: List, client_socket: socket.socket = None) -> bool:
@@ -72,7 +72,7 @@ class GenericSocketUser(object):
 
         except Exception as e:
             logger.warning(f"Exception caught: {e}")
-            self.close(client_socket)
+            self.close(working_socket)
             return False
 
     def send_op(self, op_code: OpCode, client_socket: socket.socket = None) -> bool:
@@ -91,7 +91,7 @@ class GenericSocketUser(object):
 
         except Exception as e:
             logger.warning(f"Exception caught: {e}")
-            self.close(client_socket)
+            self.close(working_socket)
             return False
 
     def send_response(self, response_code: ResponseCode, client_socket: socket.socket = None) -> bool:
@@ -110,7 +110,7 @@ class GenericSocketUser(object):
 
         except Exception as e:
             logger.warning(f"Exception caught: {e}")
-            self.close(client_socket)
+            self.close(working_socket)
             return False
 
     def close(self, client_socket: socket.socket = None):

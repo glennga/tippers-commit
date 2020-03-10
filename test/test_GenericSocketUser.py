@@ -4,6 +4,7 @@ import logging
 import socket
 import random
 import string
+import time
 
 from communication import GenericSocketUser
 from shared import *
@@ -157,6 +158,7 @@ class TestGenericSocketUser(unittest.TestCase):
         client = GenericSocketUser()
         client.socket.connect((socket.gethostname(), working_port))
         logger.info(f"Connected w/ server at {(socket.gethostname(), working_port)}.")
+        time.sleep(0.1)
 
         status = client.send_response(ResponseCode.OK)
         logger.info(f"Sent test message.")
