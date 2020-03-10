@@ -1,6 +1,6 @@
 {
+  "protocol-db": "protocol.db",
   "coordinator-port": 50000,
   "wait-period": 5.0,
-  "timeout": 5.0,
-  "wal-file": "wal.log"
+  "timeout": 5.0
 }
