@@ -78,6 +78,7 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
         threading.Thread.__init__(self, daemon=True)
 
         self.protocol_db = protocol.ProtocolDatabase(context['protocol_db'])
+        self.transaction_coordinator = context['transaction_coordinator']
         self.context = context
 
         # Setup a connection to the RM (i.e. Postgres).
@@ -130,6 +131,7 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
     def _initialize_state(self):
         logger.info(f"New transaction started: {self.transaction_id}.")
         self.protocol_db.log_initialize_of(str(self.transaction_id), TransactionRole.PARTICIPANT)
+        self.protocol_db.add_coordinator(str(self.transaction_id), self.transaction_coordinator)
         self.state = ParticipantStates.ACTIVE
 
     def _active_state(self):

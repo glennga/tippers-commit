@@ -1,33 +1,46 @@
 [
   {
+    "alias": "anthurium",
+    "hostname": "anthurium",
+    "port": 50000
+  },
+  {
+    "alias": "hibiscus01",
     "hostname": "hibiscus01",
     "port": 50000
   },
   {
+    "alias": "hibiscus02",
     "hostname": "hibiscus02",
     "port": 50000
   },
   {
+    "alias": "hibiscus03",
     "hostname": "hibiscus03",
     "port": 50000
   },
   {
+    "alias": "hibiscus04",
     "hostname": "hibiscus04",
     "port": 50000
   },
   {
+    "alias": "hibiscus05",
     "hostname": "hibiscus05",
     "port": 50000
   },
   {
+    "alias": "hibiscus06",
     "hostname": "hibiscus06",
     "port": 50000
   },
   {
+    "alias": "hibiscus07",
     "hostname": "hibiscus07",
     "port": 50000
   },
   {
+    "alias": "hibiscus08",
     "hostname": "hibiscus08",
     "port": 50000
   }

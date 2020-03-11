@@ -71,6 +71,7 @@ class TestTransactionParticipantThread(unittest.TestCase):
         from_coordinator_socket, from_coordinator_address = participant_socket.accept()
         participant_thread = participate.TransactionParticipantThread(
             **self.get_postgres_context(),
+            transaction_coordinator=1,
             transaction_id=str(uuid.uuid4()),
             client_socket=from_coordinator_socket,
             protocol_db=self.test_file,
@@ -111,6 +112,7 @@ class TestTransactionParticipantThread(unittest.TestCase):
         from_coordinator_socket, from_coordinator_address = participant_socket.accept()
         participant_thread = participate.TransactionParticipantThread(
             **self.get_postgres_context(),
+            transaction_coordinator=1,
             transaction_id=str(uuid.uuid4()),
             client_socket=from_coordinator_socket,
             protocol_db=self.test_file,
@@ -151,6 +153,7 @@ class TestTransactionParticipantThread(unittest.TestCase):
         from_coordinator_socket, from_coordinator_address = participant_socket.accept()
         participant_thread = participate.TransactionParticipantThread(
             **self.get_postgres_context(),
+            transaction_coordinator=1,
             transaction_id=str(uuid.uuid4()),
             client_socket=from_coordinator_socket,
             protocol_db=self.test_file,
@@ -190,6 +193,7 @@ class TestTransactionParticipantThread(unittest.TestCase):
         from_coordinator_socket_1, from_coordinator_address = participant_socket.accept()
         participant_thread = participate.TransactionParticipantThread(
             **self.get_postgres_context(),
+            transaction_coordinator=1,
             transaction_id=str(uuid.uuid4()),
             client_socket=from_coordinator_socket_1,
             protocol_db=self.test_file,
@@ -236,6 +240,7 @@ class TestTransactionParticipantThread(unittest.TestCase):
         from_coordinator_socket_1, from_coordinator_address = participant_socket.accept()
         participant_thread = participate.TransactionParticipantThread(
             **self.get_postgres_context(),
+            transaction_coordinator=1,
             transaction_id=str(uuid.uuid4()),
             client_socket=from_coordinator_socket_1,
             protocol_db=self.test_file,
@@ -283,6 +288,7 @@ class TestTransactionParticipantThread(unittest.TestCase):
         from_coordinator_socket_1, from_coordinator_address = participant_socket.accept()
         participant_thread = participate.TransactionParticipantThread(
             **self.get_postgres_context(),
+            transaction_coordinator=1,
             transaction_id=str(uuid.uuid4()),
             client_socket=from_coordinator_socket_1,
             protocol_db=self.test_file,
