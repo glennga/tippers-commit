@@ -1,0 +1,10 @@
+name: tippers-commit-env
+channels:
+  - conda-forge
+  - anaconda
+  - plotly
+  - defaults
+dependencies:
+  - python=3.7
+  - psycopg2
+  - postgresql
