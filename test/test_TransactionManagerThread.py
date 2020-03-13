@@ -1,10 +1,15 @@
-import socket
-import logging
-import unittest
-import time
-import manager
+import psycopg2.extensions
 import communication
+import unittest
+import psycopg2
+import protocol
+import manager
+import logging
+import socket
+import time
 import uuid
+import json
+import os
 
 from typing import Union
 from shared import *
@@ -13,14 +18,14 @@ from shared import *
 logger = logging.getLogger(__name__)
 
 
-class _TestNoOpTransactionStateFactory(manager.TransactionStateAbstractFactory):
+class _TestDummyTransactionRoleFactory(manager.TransactionRoleAbstractFactory):
     def get_coordinator(self, client_socket: Union[socket.socket, None]):
         logger.info("Spawning coordinator.")
         if client_socket is not None:
             client_socket.close()
 
         class _DummyCoordinator(object):
-            transaction_id = uuid.uuid4().bytes
+            transaction_id = uuid.uuid4()
 
             @staticmethod
             def start():
@@ -28,7 +33,7 @@ class _TestNoOpTransactionStateFactory(manager.TransactionStateAbstractFactory):
 
         return _DummyCoordinator()
 
-    def get_participant(self, transaction_id: bytes, client_socket: socket.socket):
+    def get_participant(self, coordinator_id: int, transaction_id: bytes, client_socket: socket.socket):
         logger.info("Spawning participant.")
         if client_socket is not None:
             client_socket.close()
@@ -40,16 +45,8 @@ class _TestNoOpTransactionStateFactory(manager.TransactionStateAbstractFactory):
 
         return _DummyParticipant()
 
-    def get_wal(self):
-        class _NoUncommittedTransactionsWAL(object):
-            @staticmethod
-            def get_uncommitted_transactions():
-                return []
 
-        return _NoUncommittedTransactionsWAL()
-
-
-class _TestCoordinatorRecoveryTransactionStateFactory(manager.TransactionStateAbstractFactory):
+class _TestCoordinatorRecoveryTransactionStateFactory(manager.TransactionRoleAbstractFactory):
     def __init__(self, **context):
         super().__init__()
         self.context = context
@@ -74,29 +71,11 @@ class _TestCoordinatorRecoveryTransactionStateFactory(manager.TransactionStateAb
 
         return _DummyCoordinator()
 
-    def get_participant(self, transaction_id: bytes, client_socket: socket.socket):
+    def get_participant(self, coordinator_id: int, transaction_id: bytes, client_socket: socket.socket):
         pass
 
-    def get_wal(self):
-        transaction_id_1 = self.context['transaction_id_1']
 
-        class _WALWithUncommittedTransaction(object):
-            @staticmethod
-            def get_role_in(transaction_id: bytes):
-                return TransactionRole.COORDINATOR
-
-            @staticmethod
-            def get_participants_in(transaction_id: bytes):
-                return [1]
-
-            @staticmethod
-            def get_uncommitted_transactions():
-                return [(transaction_id_1, "P",)]
-
-        return _WALWithUncommittedTransaction()
-
-
-class _TestParticipantRecoveryTransactionStateFactory(manager.TransactionStateAbstractFactory):
+class _TestParticipantRecoveryTransactionStateFactory(manager.TransactionRoleAbstractFactory):
     def __init__(self, **context):
         super().__init__()
         self.context = context
@@ -104,7 +83,7 @@ class _TestParticipantRecoveryTransactionStateFactory(manager.TransactionStateAb
     def get_coordinator(self, client_socket: Union[socket.socket, None]):
         pass
 
-    def get_participant(self, transaction_id: bytes, client_socket: socket.socket):
+    def get_participant(self, coordinator_id: int, transaction_id: bytes, client_socket: socket.socket):
         logger.info("Spawning participant.")
         context = self.context
 
@@ -124,43 +103,65 @@ class _TestParticipantRecoveryTransactionStateFactory(manager.TransactionStateAb
 
         return _DummyParticipant()
 
-    def get_wal(self):
-        transaction_id_1 = self.context['transaction_id_1']
-
-        class _WALWithUncommittedTransaction(object):
-            @staticmethod
-            def get_role_in(transaction_id: bytes):
-                return TransactionRole.PARTICIPANT
-
-            @staticmethod
-            def get_coordinator_for(transaction_id: bytes):
-                return 1
-
-            @staticmethod
-            def get_uncommitted_transactions():
-                return [(transaction_id_1, "P",)]
-
-        return _WALWithUncommittedTransaction()
-
 
 class TestTransactionManagerThread(unittest.TestCase):
-    """ Verifies the class that acts as our transaction manager (i.e. the TM daemon). """
+    test_file = 'test_database.log'
     test_port = 52000
+
+    @staticmethod
+    def get_postgres_connection():
+        with open('config/postgres.json') as postgres_config_file:
+            return psycopg2.connect(**json.load(postgres_config_file))
+
+    @staticmethod
+    def get_postgres_context():
+        with open('config/postgres.json') as postgres_config_file:
+            postgres_json = json.load(postgres_config_file)
+            return {
+                "postgres_username": postgres_json['user'],
+                "postgres_password": postgres_json['password'],
+                "postgres_hostname": postgres_json['host'],
+                "postgres_database": postgres_json['database']
+            }
+
+    def tearDown(self) -> None:
+        try:
+            os.remove(self.test_file)
+            os.remove(self.test_file + '1')
+        except OSError:
+            pass
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        try:
+            conn = cls.get_postgres_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                TRUNCATE TABLE thermometerobservation ;
+            """)
+            cur.commit()
+
+        except psycopg2.Error as e:
+            pass
 
     def test_open_close(self):
         # Spawn and start our manager threads.
-        manager_thread_1 = manager._TransactionManagerThread(
-            state_factory=_TestNoOpTransactionStateFactory(),
-            hostname=socket.gethostname(),
+        manager_thread_1 = manager.TransactionManagerThread(
+            **self.get_postgres_context(),
+            protocol_db=self.test_file,
+            role_factory=_TestDummyTransactionRoleFactory(),
+            site_alias=socket.gethostname(),
             node_port=self.test_port,
             site_list=[
                 {'hostname': socket.gethostname(), 'port': self.test_port},
                 {'hostname': socket.gethostname(), 'port': self.test_port + 1}
             ]
         )
-        manager_thread_2 = manager._TransactionManagerThread(
-            state_factory=_TestNoOpTransactionStateFactory(),
-            hostname=socket.gethostname(),
+        manager_thread_2 = manager.TransactionManagerThread(
+            **self.get_postgres_context(),
+            protocol_db=self.test_file,
+            role_factory=_TestDummyTransactionRoleFactory(),
+            site_alias=socket.gethostname(),
             node_port=self.test_port + 1,
             site_list=[
                 {'hostname': socket.gethostname(), 'port': self.test_port},
@@ -189,12 +190,14 @@ class TestTransactionManagerThread(unittest.TestCase):
         manager_thread_2.join()
 
     def test_start_transaction(self):
-        manager_thread = manager._TransactionManagerThread(
-            state_factory=_TestNoOpTransactionStateFactory(),
-            hostname=socket.gethostname(),
+        manager_thread = manager.TransactionManagerThread(
+            **self.get_postgres_context(),
+            protocol_db=self.test_file,
+            role_factory=_TestDummyTransactionRoleFactory(),
+            site_alias=socket.gethostname(),
             node_port=self.test_port + 2,
             site_list=[
-                {'hostname': socket.gethostname(), 'port': self.test_port + 2}
+                {'alias': socket.gethostname(), 'hostname': socket.gethostname(), 'port': self.test_port + 2}
             ]
         )
         manager_thread.start()
@@ -216,9 +219,11 @@ class TestTransactionManagerThread(unittest.TestCase):
         manager_thread.join()
 
     def test_participate_in_transaction(self):
-        manager_thread = manager._TransactionManagerThread(
-            state_factory=_TestNoOpTransactionStateFactory(),
-            hostname=socket.gethostname(),
+        manager_thread = manager.TransactionManagerThread(
+            **self.get_postgres_context(),
+            protocol_db=self.test_file,
+            role_factory=_TestDummyTransactionRoleFactory(),
+            site_alias=socket.gethostname(),
             node_port=self.test_port + 3,
             site_list=[
                 {'hostname': socket.gethostname(), 'port': self.test_port + 3}
@@ -227,10 +232,10 @@ class TestTransactionManagerThread(unittest.TestCase):
         manager_thread.start()
         time.sleep(0.5)
 
-        transaction_id = uuid.uuid4().bytes
+        transaction_id = str(uuid.uuid4())
         other_manager_socket = communication.GenericSocketUser()
         other_manager_socket.socket.connect((socket.gethostname(), self.test_port + 3))
-        other_manager_socket.send_message(OpCode.INITIATE_PARTICIPANT, [transaction_id])
+        other_manager_socket.send_message(OpCode.INITIATE_PARTICIPANT, [transaction_id, 0])
         time.sleep(0.01)
         other_manager_socket.socket.close()
 
@@ -243,9 +248,11 @@ class TestTransactionManagerThread(unittest.TestCase):
         manager_thread.join()
 
     def test_commit_from_coordinator_no_knowledge(self):
-        manager_thread = manager._TransactionManagerThread(
-            state_factory=_TestNoOpTransactionStateFactory(),
-            hostname=socket.gethostname(),
+        manager_thread = manager.TransactionManagerThread(
+            **self.get_postgres_context(),
+            protocol_db=self.test_file,
+            role_factory=_TestDummyTransactionRoleFactory(),
+            site_alias=socket.gethostname(),
             node_port=self.test_port + 4,
             site_list=[
                 {'hostname': socket.gethostname(), 'port': self.test_port + 4}
@@ -254,7 +261,7 @@ class TestTransactionManagerThread(unittest.TestCase):
         manager_thread.start()
         time.sleep(0.5)
 
-        transaction_id = uuid.uuid4().bytes
+        transaction_id = str(uuid.uuid4())
         other_manager_socket = communication.GenericSocketUser()
         other_manager_socket.socket.connect((socket.gethostname(), self.test_port + 4))
         other_manager_socket.send_message(OpCode.COMMIT_FROM_COORDINATOR, [transaction_id])
@@ -271,77 +278,64 @@ class TestTransactionManagerThread(unittest.TestCase):
         client_socket.socket.close()
         manager_thread.join()
 
-    def test_coordinator_recovery(self):
-        transaction_id_1 = uuid.uuid4().bytes
-        manager_thread_1 = manager._TransactionManagerThread(
-            state_factory=_TestCoordinatorRecoveryTransactionStateFactory(transaction_id_1=transaction_id_1),
-            hostname=socket.gethostname(),
+    def test_recovery_coordinator(self):
+        transaction_id_1 = str(uuid.uuid4())
+        conn = self.get_postgres_connection()
+        conn.tpc_begin(psycopg2.extensions.Xid.from_string(transaction_id_1))
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO thermometerobservation 
+            VALUES ('a239a033-b340-426d-a686-ad32908709ae', 48, '2017-11-08 00:00:00', 
+                    '9592a785_d3a4_4de2_bc3d_cfa1a127bf40');
+        """)
+
+        # Coordinator knows COMMIT, but does not have the ACK.
+        pdb1 = protocol.ProtocolDatabase(self.test_file + '1')
+        pdb1.log_initialize_of(transaction_id_1, TransactionRole.COORDINATOR)
+        pdb1.add_participant(transaction_id_1, 1)
+        pdb1.log_commit_of(transaction_id_1)
+        conn.tpc_prepare()
+        pdb1.close()
+
+        class TestRM(object):
+            def tpc_recover(self):
+                return []
+
+            def close(self):
+                pass
+
+        manager_thread_1 = manager.TransactionManagerThread(
+            **self.get_postgres_context(),
+            protocol_db=self.test_file + '1',
+            role_factory=_TestCoordinatorRecoveryTransactionStateFactory(transaction_id_1=transaction_id_1),
+            site_alias=socket.gethostname(),
             node_port=self.test_port + 5,
             site_list=[
-                {'hostname': socket.gethostname(), 'port': self.test_port + 5},
-                {'hostname': socket.gethostname(), 'port': self.test_port + 6}
+                {'alias': socket.gethostname(), 'hostname': socket.gethostname(), 'port': self.test_port + 5},
+                {'alias': socket.gethostname(), 'hostname': socket.gethostname(), 'port': self.test_port + 6}
             ]
         )
-        manager_thread_2 = manager._TransactionManagerThread(
-            state_factory=_TestNoOpTransactionStateFactory(),
-            hostname=socket.gethostname(),
+        manager_thread_2 = manager.TransactionManagerThread(
+            **self.get_postgres_context(),
+            test_rm=TestRM(),
+            protocol_db=self.test_file,
+            role_factory=_TestDummyTransactionRoleFactory(),
+            site_alias=socket.gethostname(),
             node_port=self.test_port + 6,
             site_list=[
-                {'hostname': socket.gethostname(), 'port': self.test_port + 5},
-                {'hostname': socket.gethostname(), 'port': self.test_port + 6}
+                {'alias': socket.gethostname(), 'hostname': socket.gethostname(), 'port': self.test_port + 5},
+                {'alias': socket.gethostname(), 'hostname': socket.gethostname(), 'port': self.test_port + 6}
             ]
         )
 
         manager_thread_2.start()
-        time.sleep(0.5)
+        time.sleep(1.0)
         manager_thread_1.start()
         time.sleep(0.5)
 
         # Create new connection to TM, and issue the shutdown.
         client_socket = communication.GenericSocketUser()
         client_socket.socket.connect((socket.gethostname(), self.test_port + 5))
-        client_socket.send_op(OpCode.SHUTDOWN)
-        time.sleep(0.5)
-        client_socket.socket.close()
-
-        manager_thread_1.join()
-        manager_thread_2.join()
-
-    def test_participant_recovery(self):
-        transaction_id_1 = uuid.uuid4().bytes
-        manager_thread_1 = manager._TransactionManagerThread(
-            state_factory=_TestParticipantRecoveryTransactionStateFactory(
-                site_list=[
-                    {'hostname': socket.gethostname(), 'port': self.test_port + 7},
-                    {'hostname': socket.gethostname(), 'port': self.test_port + 8}
-                ],
-                transaction_id_1=transaction_id_1
-            ),
-            hostname=socket.gethostname(),
-            node_port=self.test_port + 7,
-            site_list=[
-                {'hostname': socket.gethostname(), 'port': self.test_port + 7},
-                {'hostname': socket.gethostname(), 'port': self.test_port + 8}
-            ]
-        )
-        manager_thread_2 = manager._TransactionManagerThread(
-            state_factory=_TestNoOpTransactionStateFactory(),
-            hostname=socket.gethostname(),
-            node_port=self.test_port + 8,
-            site_list=[
-                {'hostname': socket.gethostname(), 'port': self.test_port + 7},
-                {'hostname': socket.gethostname(), 'port': self.test_port + 8}
-            ]
-        )
-
-        manager_thread_2.start()
-        time.sleep(0.5)
-        manager_thread_1.start()
-        time.sleep(0.5)
-
-        # Create new connection to TM, and issue the shutdown.
-        client_socket = communication.GenericSocketUser()
-        client_socket.socket.connect((socket.gethostname(), self.test_port + 7))
         client_socket.send_op(OpCode.SHUTDOWN)
         time.sleep(0.5)
         client_socket.socket.close()
