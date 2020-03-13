@@ -1,14 +1,16 @@
 """ This script will generate and send TIPPERS transactions to a TM daemon. """
-import communication
-import logging.config
-import logging
-import argparse
-import json
-import socket
-import datetime
-import sys
-import time
+import __init__  # Stupid way to get logging to work...
 
+import communication
+import argparse
+import datetime
+import logging
+import socket
+import json
+import time
+import sys
+
+from typing import Tuple, List
 from shared import *
 
 # We maintain a module-level logger.
@@ -21,7 +23,7 @@ class _TransactionGenerator(communication.GenericSocketUser):
         self.context = context
         super().__init__()
 
-    def _insert_statement(self, transaction_id: bytes, statement: str, hash_input: list) -> bool:
+    def _insert_statement(self, transaction_id: bytes, statement: str, hash_input: Tuple) -> bool:
         """ Send the insertion to TM. Additionally, send as input the object to hash on (in our case, this is the
         <sensor_id, timestamp>).
 
@@ -48,7 +50,7 @@ class _TransactionGenerator(communication.GenericSocketUser):
             self.is_socket_closed = False
 
         self.send_op(OpCode.START_TRANSACTION)
-        transaction_id = self.read_message()
+        transaction_id = self.read_message()[1]
         logger.info(f"Starting transaction. Issued ID: {str(transaction_id)}")
         return transaction_id
 
@@ -69,6 +71,7 @@ class _TransactionGenerator(communication.GenericSocketUser):
         if manager_response is None:
             logger.error(f"Connection w/ transaction manager has been lost. Transaction has aborted.")
             self.is_socket_closed = True
+            return
 
         elif manager_response[0] == ResponseCode.TRANSACTION_COMMITTED:
             logger.info(f"Transaction {transaction_id} has been committed.")
@@ -84,12 +87,12 @@ class _TransactionGenerator(communication.GenericSocketUser):
         timestamp = timestamp[0:10] + " " + timestamp[10:]
         return datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
 
-    def _perform_transaction(self, insert_list: list):
+    def _perform_transaction(self, insert_list: List):
         transaction_id = self._start_transaction()
         for insert in insert_list:
             if not self._insert_statement(transaction_id, insert[0], insert[1]):
                 self.socket.close()  # The abort is implicit here.
-                break
+                return
 
         self._commit_transaction(transaction_id)
 
@@ -134,9 +137,9 @@ class _TransactionGenerator(communication.GenericSocketUser):
                 if timestamp <= cur_timestamp:
                     logger.debug(f'Processing: {record}, ({sensor_id}, {timestamp})')
                     if sensor_id in sensor_dict:
-                        sensor_dict[sensor_id].append([[record], [sensor_id, timestamp]])
+                        sensor_dict[sensor_id].append([record, (sensor_id, timestamp,)])
                     else:
-                        sensor_dict[sensor_id] = [[[record], [sensor_id, timestamp]]]
+                        sensor_dict[sensor_id] = [[record, (sensor_id, timestamp,)]]
 
                 else:
                     for (k, v) in sensor_dict.items():
@@ -166,11 +169,6 @@ if __name__ == '__main__':
 
     with open(c_args.config_path + '/generator.json') as generator_config_file:
         generator_json = json.load(generator_config_file)
-
-    # Setup the logger.
-    with open(c_args.config_path + '/logging.json') as logging_config_file:
-        logging_json = json.load(logging_config_file)
-        logging.config.dictConfig(logging_json)
 
     _TransactionGenerator(
         coordinator_hostname=generator_json['coordinator-hostname'],

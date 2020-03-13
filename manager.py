@@ -1,4 +1,7 @@
 """ This script will act as a local TM, which performs 2PC over several sites. """
+import __init__  # Stupid way to get logging to work...
+
+import logging.config
 import communication
 import participate
 import coordinate
@@ -48,7 +51,6 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
     class _DefaultTransactionRoleFactory(TransactionRoleAbstractFactory):
         def get_coordinator(self, client_socket: Union[socket.socket, None]):
             return coordinate.TransactionCoordinatorThread(
-                site_alias=self.context['site_alias'],
                 client_socket=client_socket,
                 **self.context
             )
@@ -85,7 +87,7 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
                 (self.site_list[coordinator_id]['hostname'], self.site_list[coordinator_id]['port']), )
             logger.info(f"Connecting to coordinator: {self.site_list[coordinator_id]['hostname']}.")
 
-            participant_thread = self.role_factory.get_participant(transaction_id, coordinator_socket)
+            participant_thread = self.role_factory.get_participant(coordinator_id, transaction_id, coordinator_socket)
             logger.info(f"Spawning participant thread in the ABORT state.")
             participant_thread.state = participate.ParticipantStates.ABORT
             self.child_threads[transaction_id] = participant_thread
@@ -101,7 +103,7 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
             participant_ids = protocol_db.get_participants_in(transaction_id)
             logger.info(f"We are aware of the following participants {participant_ids}.")
             for participant_id in participant_ids:
-                logging.info(f"Connecting to participant {participant_id}.")
+                logger.info(f"Connecting to participant {participant_id}.")
                 working_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 working_site = self.site_list[participant_id]
 
@@ -140,7 +142,7 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
             participant_ids = protocol_db.get_participants_in(transaction_id)
             logger.info(f"We are aware of the following participants {participant_ids}.")
             for participant_id in participant_ids:
-                logging.info(f"Connecting to participant {participant_id}.")
+                logger.info(f"Connecting to participant {participant_id}.")
                 working_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 working_site = self.site_list[participant_id]
 
@@ -183,7 +185,7 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
     def _initialize_state(self):
         # Now, bind and listen on the specified port.
         logger.info(f"Listening for requests through port {self.context['node_port']}.")
-        self.socket.bind((socket.gethostname(), self.context['node_port'],))
+        self.socket.bind(('0.0.0.0', self.context['node_port'],))
         self.socket.listen(5)
 
         # Move the the ACTIVE state when we are done.
@@ -210,6 +212,7 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
             logger.info("Transaction has been started. Spawning coordinator thread.")
             coordinator_thread = self.role_factory.get_coordinator(client_socket)
             self.child_threads[coordinator_thread.transaction_id] = coordinator_thread
+            self.send_message(OpCode.START_TRANSACTION, [str(coordinator_thread.transaction_id)], client_socket)
             coordinator_thread.start()
 
         elif requested_op == OpCode.INITIATE_PARTICIPANT:
@@ -240,6 +243,7 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
             logger.warning(f"Unknown/unsupported operation received. Taking no action. {client_message}")
 
     def run(self) -> None:
+        logger.info("Starting instance of TM daemon.")
         while self.state != TransactionManagerStates.FINISHED:
             if self.state == TransactionManagerStates.RECOVERY:
                 logger.info("Moving to RECOVERY state.")
@@ -272,7 +276,7 @@ if __name__ == '__main__':
 
     TransactionManagerThread(
         site_alias=c_args.site_alias,
-        node_port=manager_json['port'],
+        node_port=manager_json['node-port'],
 
         failure_time=manager_json['failure-time'],
         protocol_db=manager_json['protocol-db'],
