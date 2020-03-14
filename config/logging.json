@@ -16,7 +16,7 @@
     },
     "fileHandler": {
       "class": "logging.FileHandler",
-      "filename": "/home/akala/tippers-commit/tippers.log",
+      "filename": "tippers.log",
       "formatter": "default",
       "level": "DEBUG"
     }
@@ -24,8 +24,7 @@
   "root": {
     "level": "DEBUG",
     "handlers": [
-      "consoleHandler",
-      "fileHandler"
+      "consoleHandler"
     ]
   }
 }
