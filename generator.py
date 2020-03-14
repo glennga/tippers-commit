@@ -10,7 +10,7 @@ import json
 import time
 import sys
 
-from typing import Tuple, List
+from typing import Tuple, List, Union
 from shared import *
 
 # We maintain a module-level logger.
@@ -40,7 +40,7 @@ class _TransactionGenerator(communication.GenericSocketUser):
         logger.debug(f"Received from transaction manager: {reply_message}")
         return reply_message is not None and reply_message[0] == ResponseCode.OK
 
-    def _start_transaction(self) -> bytes:
+    def _start_transaction(self) -> Union[bytes, None]:
         """ :return: The transaction ID. """
         if self.is_socket_closed:
             hostname, port = self.context['coordinator_hostname'], int(self.context['coordinator_port'])
@@ -50,9 +50,14 @@ class _TransactionGenerator(communication.GenericSocketUser):
             self.is_socket_closed = False
 
         self.send_op(OpCode.START_TRANSACTION)
-        transaction_id = self.read_message()[1]
-        logger.info(f"Starting transaction. Issued ID: {str(transaction_id)}")
-        return transaction_id
+        manager_response = self.read_message()
+        if manager_response is not None:
+            transaction_id = manager_response[1]
+            logger.info(f"Starting transaction. Issued ID: {str(transaction_id)}")
+            return transaction_id
+
+        else:
+            return None
 
     def _abort_transaction(self, transaction_id: bytes):
         logger.info(f"Sending ABORT message to the transaction manager for {transaction_id}.")
@@ -89,8 +94,14 @@ class _TransactionGenerator(communication.GenericSocketUser):
 
     def _perform_transaction(self, insert_list: List):
         transaction_id = self._start_transaction()
+        if transaction_id is None:
+            logger.warning("Could not start a transaction. Aborting.")
+            self.socket.close()
+            return
+
         for insert in insert_list:
             if not self._insert_statement(transaction_id, insert[0], insert[1]):
+                logger.warning("Could not perform the insertion. Aborting.")
                 self.socket.close()  # The abort is implicit here.
                 return
 

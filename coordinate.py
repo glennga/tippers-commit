@@ -211,13 +211,16 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
             # Perform the multicast. Sockets will close upon failure.
             self._final_multicast(OpCode.COMMIT_FROM_COORDINATOR if self.previous_state == CoordinatorStates.COMMIT
                                   else OpCode.ROLLBACK_FROM_COORDINATOR)
-            time.sleep(self.context['wait_time'])
+            time.sleep(self.context['failure_time'])
 
         # All participants have acknowledged. Move to FINISHED.
         self.state = CoordinatorStates.FINISHED
 
     def _finished_state(self):
         self.protocol_db.log_completion_of(str(self.transaction_id))
+        self.send_response(ResponseCode.TRANSACTION_COMMITTED if self.previous_state == CoordinatorStates.COMMIT
+                           else ResponseCode.TRANSACTION_ABORTED)
+        time.sleep(1)  # Wait for client to acknowledge the response.
         self.protocol_db.close()
         self.close()
 
@@ -257,8 +260,13 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
                 logger.debug(f"Endpoint entry is {endpoint}.")
 
                 self.active_map[endpoint_index] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.active_map[endpoint_index].connect((endpoint['hostname'], endpoint['port'],))
-                logger.info(f"Adding new participant to transaction: {endpoint['hostname']}")
+                try:
+                    self.active_map[endpoint_index].connect((endpoint['hostname'], endpoint['port'],))
+                    logger.info(f"Adding new participant to transaction: {endpoint['hostname']}")
+                except socket.error:
+                    logger.error(f"Unable to attach the participant {endpoint['hostname']}.")
+                    return False
+
                 self.send_message(OpCode.INITIATE_PARTICIPANT, [str(self.transaction_id), self.node_id],
                                   self.active_map[endpoint_index])
 
@@ -280,7 +288,7 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
 
         for participant, participant_socket in self.active_map.items():
             logger.info(f"Sending {op_code} to participant {participant}.")
-            self.send_op(op_code, participant_socket)  # Swallow the error.
+            self.send_message(op_code, [str(self.transaction_id)], participant_socket)  # Swallow the error.
 
             participant_response = self.read_message(participant_socket)
             if participant_response is not None and participant_response[0] == ResponseCode.ACKNOWLEDGE_END:
