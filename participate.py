@@ -27,52 +27,6 @@ class ParticipantStates(IntEnum):
 
 
 class TransactionParticipantThread(threading.Thread, communication.GenericSocketUser):
-    """
-    A participant adheres to the FSM specification below.
-    --------------------------------------------------------------------------------------------------------------------
-    |    INITIALIZE    | A participant can only enter this state via instantiation (i.e. a call from the server daemon).
-    |                  | From this state, the participant must move to the ACTIVE state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |      ACTIVE      | A participant can enter this state from the ACTIVE state or from the INITIALIZE state. Here,
-    |                  | insertions are made and acknowledgement messages are sent back to the coordinator informing the
-    |                  | success of the insertion itself (insertion-time constraint checking). If an insertion message
-    |                  | is given by the coordinator, we cycle back to the ACTIVE state. If a prepare message is given,
-    |                  | we send the commit to our RM and reply to the coordinator with our status, moving us to either
-    |                  | the ABORT state or the PREPARED state. If an abort message is given, we ABORT and reply to the
-    |                  | coordinator with an acknowledgement. If at any point these messages fail (i.e. a coordinator
-    |                  | error), we delegate this problem to the ABORT or PREPARED states.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |     PREPARED     | A participant can enter this state from the ACTIVE, WAITING, or PREPARED states. Upon
-    |                  | receiving a commit message from our coordinator, we move to the COMMIT state. Upon receiving an
-    |                  | abort message, we move to the ABORT state. If we experience a socket timeout/error while
-    |                  | waiting for a message, we move to the WAITING state. If we exit out of the WAITING state and
-    |                  | traverse back to here, we can possibly move from the PREPARED state back to the PREPARED state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |      ABORT       | A participant can enter this state from the following states: RECOVERY, ACTIVE, PREPARED.
-    |                  | In ABORT, a participant will always perform an "undo" action from the WAL. If the
-    |                  | participant was previously in the RECOVERY state, the participant will move straight to the
-    |                  | FINISHED state. Otherwise, a participant will send an acknowledgement to the coordinator. If
-    |                  | this action times out or fails, we move to the WAITING state. Otherwise, we move to the
-    |                  | FINISHED state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |      COMMIT      | A participant can enter this state from the following states: RECOVERY, PREPARED, WAITING.
-    |                  | Here, a completion log is written and persisted. Then, the log is flushed and an
-    |                  | acknowledgement is sent to the coordinator. If this fails, we move to the WAITING state.
-    |                  | Otherwise, we move to the FINISHED state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |     WAITING      | A participant can enter this state from the following states: PREPARED, ABORT, COMMIT-- if they
-    |                  | do not receive a commit or abort message without errors, or if they are unable to send an
-    |                  | acknowledgement without errors. In both cases, the participant will close the offending socket.
-    |                  | If we are waiting for a COMMIT or ABORT message, we will wait until a new socket is assigned
-    |                  | to us by the server daemon and request the decision. If we are waiting to send an
-    |                  | acknowledgement of an abort or commit, wait until a new socket is assigned to us and send the
-    |                  | acknowledgement. If this fails again, we cycle back to the WAITING state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |     FINISHED     | A participant can only enter this state from the COMMIT state or the ABORT state. This
-    |                  | represents the FSM sink. From here, the thread is killed.
-    --------------------------------------------------------------------------------------------------------------------
-    """
-
     def __init__(self, transaction_id: str, client_socket: socket.socket, **context):
         communication.GenericSocketUser.__init__(self, client_socket)
         threading.Thread.__init__(self, daemon=True)

@@ -29,50 +29,6 @@ class CoordinatorStates(IntEnum):
 
 
 class TransactionCoordinatorThread(threading.Thread, communication.GenericSocketUser):
-    """
-    A coordinator adheres to the FSM specification below.
-    --------------------------------------------------------------------------------------------------------------------
-    |    INITIALIZE    | A coordinator can only enter this state via instantiation (i.e. a call from the server daemon).
-    |                  | From this state, the coordinator must move to the ACTIVE state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |      ACTIVE      | A coordinator can enter this state from the ACTIVE state or from the INITIALIZE state. Here,
-    |                  | insertions are made at the local site or by sending insertions to various participants and
-    |                  | waiting for acknowledgements. If a PREPARE message is given by the client, we send the commit
-    |                  | to our local RM. If this succeeds, then we move to the POLLING state. Otherwise, we move to the
-    |                  | ABORT state. If we fail to get an acknowledgement back from a participant, then we move to the
-    |                  | ABORT state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |     POLLING      | A coordinator can enter this state from the ACTIVE state. Here, we send a "prepare" message to
-    |                  | all participants. If we fail to receive an acknowledgement from any participant or at-least
-    |                  | one participant replies back with "abort", then move to the ABORT state. Otherwise, we move to
-    |                  | the COMMIT state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |      ABORT       | A coordinator can enter this state from the following states: RECOVERY, ACTIVE, POLLING.
-    |                  | In ABORT, a coordinator will always perform an "undo" action from the WAL. In this state, a
-    |                  | coordinator will send an ABORT message to all participants and await acknowledgements from
-    |                  | each. If there exists a socket error, we will swallow the errors (temporarily) and send abort
-    |                  | messages to the remaining participants. Noting the participants that did not acknowledge the
-    |                  | abort, we move to the WAITING state. If all participants acknowledged the abort, then we move
-    |                  | to the FINISHED state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |      COMMIT      | A coordinator can enter this state from the following states: RECOVERY or POLLING. Here, we
-    |                  | send a "commit" message to all participants involved and await acknowledgements from each. If
-    |                  | there exists a socket error, we will swallow the errors (temporarily) and send commit
-    |                  | messages to the remaining participants. Noting the participants that did not acknowledge the
-    |                  | commit, we move to the WAITING state. If all participants acknowledged the commit, then we move
-    |                  | to the FINISHED state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |     WAITING      | A coordinator can enter this state from the following states: ABORT or COMMIT. In both cases,
-    |                  | we note the participants that didn't acknowledge the decision and periodically send "abort" /
-    |                  | "commit"  to these participants. Upon receiving acknowledgements from all, we move to the
-    |                  | FINISHED state.
-    |------------------|-----------------------------------------------------------------------------------------------|
-    |     FINISHED     | A participant can only enter this state from the COMMIT state or the ABORT state. Here, a
-    |                  | completion log is written and persisted. This represents the FSM sink. From here, the thread
-    |                  | is killed.
-    --------------------------------------------------------------------------------------------------------------------
-    """
-
     def __init__(self, site_alias: str, client_socket: socket.socket, **context):
         threading.Thread.__init__(self, daemon=True)
         communication.GenericSocketUser.__init__(self)
