@@ -79,6 +79,18 @@ class ProtocolDatabase(object):
         """)
         return [i[0] for i in cur.fetchall()]
 
+    def get_prepared_transactions(self) -> List[str]:
+        cur = self.conn.cursor()
+        cur.execute("""
+            SELECT tr_id, GROUP_CONCAT(state)
+            FROM STATE_LOG
+            GROUP BY tr_id 
+            HAVING GROUP_CONCAT(state) NOT LIKE "%C" AND 
+                   GROUP_CONCAT(state) NOT LIKE "%I" AND 
+                   GROUP_CONCAT(state) NOT LIKE "%A";
+        """)
+        return [i[0] for i in cur.fetchall()]
+
     def get_role_in(self, transaction_id: str) -> TransactionRole:
         cur = self.conn.cursor()
         cur.execute("""

@@ -100,8 +100,11 @@ class TestProtocolDatabase(unittest.TestCase):
         coordinator_pdb.log_prepare_of(transaction_id_1)
 
         abortable_transactions = coordinator_pdb.get_abortable_transactions()
+        prepared_transactions = coordinator_pdb.get_prepared_transactions()
         self.assertEqual(len(abortable_transactions), 1)
+        self.assertEqual(len(prepared_transactions), 1)
         self.assertEqual(abortable_transactions[0], transaction_id_2)
+        self.assertEqual(prepared_transactions[0], transaction_id_1)
 
         coordinator_pdb.close()
         time.sleep(0.5)
