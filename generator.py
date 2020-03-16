@@ -45,9 +45,14 @@ class _TransactionGenerator(communication.GenericSocketUser):
         if self.is_socket_closed:
             hostname, port = self.context['coordinator_hostname'], int(self.context['coordinator_port'])
             logger.info(f"Socket is closed. Reconnecting to TM at {hostname} through port {port}.")
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((hostname, port))
-            self.is_socket_closed = False
+            try:
+                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.socket.connect((hostname, port))
+                self.is_socket_closed = False
+            except Exception as e:
+                logger.warning(f"Unable to reconnect to TM. {e}")
+                self.is_socket_closed = True
+                return None
 
         self.send_op(OpCode.START_TRANSACTION)
         manager_response = self.read_message()
@@ -167,7 +172,7 @@ class _TransactionGenerator(communication.GenericSocketUser):
         for (k, v) in sensor_dict.items():
             self._perform_transaction(v)
 
-        self._shutdown_manager()
+        # self._shutdown_manager()
         logger.info("Exiting generator.")
         file_r.close()
         self.close()
