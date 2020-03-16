@@ -1,7 +1,6 @@
 """ This script will act as a local TM, which performs 2PC over several sites. """
 import __init__  # Stupid way to get logging to work...
 
-import logging.config
 import communication
 import participate
 import coordinate
@@ -173,9 +172,9 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
             logger.info(f"Working on to-be-aborted transaction {transaction_id}.")
             self._abort_transaction(protocol_db, transaction_id)
 
-        for transaction_id in recovery_conn.tpc_recover():
+        for transaction_id in protocol_db.get_prepared_transactions():
             logger.info(f"Working on prepared transaction {transaction_id}.")
-            self._recover_transaction(protocol_db, str(transaction_id))
+            self._recover_transaction(protocol_db, transaction_id)
 
         # We are done with recovery.
         recovery_conn.close()
@@ -183,22 +182,37 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
         self.state = TransactionManagerStates.INITIALIZE
 
     def _initialize_state(self):
-        # Now, bind and listen on the specified port.
-        logger.info(f"Listening for requests through port {self.context['node_port']}.")
-        self.socket.bind(('0.0.0.0', self.context['node_port'],))
-        self.socket.listen(5)
+        try:  # Now, bind and listen on the specified port.
+            logger.info(f"Listening for requests through port {self.context['node_port']}.")
+            self.socket.bind(('0.0.0.0', self.context['node_port'],))
+
+        except OSError:
+            logger.warning("Address is already in use. Waiting 60 seconds before reconnecting.")
+            time.sleep(60)  # TODO: Should probably make this a tunable parameter.
+            return
 
         # Move the the ACTIVE state when we are done.
+        self.socket.listen(5)
         self.state = TransactionManagerStates.ACTIVE
 
     def _active_state(self):
-        client_socket, client_address = self.socket.accept()
-        logger.info(f"Connection accepted from {client_address}.")
+        try:
+            client_socket, client_address = self.socket.accept()
+            logger.info(f"Connection accepted from {client_address}.")
+        except Exception as e:
+            logger.warning(f"Exception caught: {e}.")
+            logger.warning(f"Could not accept the connection. Moving back to the INITIALIZE state.")
+            self.state = TransactionManagerStates.INITIALIZE
+            return
 
         # Read the message from the client. Parse the OP code.
         client_message = self.read_message(client_socket)
-        requested_op = client_message[0]
+        if client_message is None:
+            logger.warning("Client has been disconnected. Looping back to the ACTIVE state.")
+            self.state = TransactionManagerStates.ACTIVE
+            return
 
+        requested_op = client_message[0]
         if requested_op == OpCode.NO_OP:
             logger.info(f"NO-OP received. Taking no action. :-)")
 
@@ -225,11 +239,13 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
                 .get_participant(coordinator_id, transaction_id, client_socket)
             self.child_threads[transaction_id].start()
 
-        elif requested_op == OpCode.COMMIT_FROM_COORDINATOR or requested_op == OpCode.ROLLBACK_FROM_COORDINATOR:
+        elif requested_op == OpCode.COMMIT_FROM_COORDINATOR or requested_op == OpCode.ROLLBACK_FROM_COORDINATOR \
+                or requested_op == OpCode.PREPARE_TO_COMMIT:
             # Parse the transaction ID from the message.
             transaction_id = client_message[1]
 
-            if transaction_id not in self.child_threads.keys():
+            if transaction_id not in self.child_threads.keys() or \
+                    (transaction_id in self.child_threads.keys() and not self.child_threads[transaction_id].is_alive()):
                 logger.info(f"We have no knowledge of transaction {transaction_id}. Replying with ACK.")
                 self.send_response(ResponseCode.ACKNOWLEDGE_END, client_socket)
                 time.sleep(0.5)  # Wait for coordinator to receive our acknowledgement.
@@ -256,6 +272,10 @@ class TransactionManagerThread(threading.Thread, communication.GenericSocketUser
             elif self.state == TransactionManagerStates.ACTIVE:
                 logger.info("Moving to ACTIVE state.")
                 self._active_state()
+
+        logger.info("Moving to FINISHED state.")
+        logger.info("Waiting for all child threads to stop.")
+        [t.join() for t in self.child_threads.values()]
 
         logger.info("Exiting TM.")
         self.close()

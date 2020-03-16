@@ -106,7 +106,7 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
     def _polling_state(self):
         def _poll_participants(participant: int, participant_socket: socket.socket) -> bool:
             logger.info(f"Sending PREPARE to participant {participant}.")
-            if not self.send_op(OpCode.PREPARE_TO_COMMIT, participant_socket):
+            if not self.send_message(OpCode.PREPARE_TO_COMMIT, [str(self.transaction_id)], participant_socket):
                 return False
 
             participant_response = self.read_message(participant_socket)
@@ -174,9 +174,12 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
 
     def _finished_state(self):
         self.protocol_db.log_completion_of(str(self.transaction_id))
-        self.send_response(ResponseCode.TRANSACTION_COMMITTED if self.previous_state == CoordinatorStates.COMMIT
-                           else ResponseCode.TRANSACTION_ABORTED)
-        time.sleep(1)  # Wait for client to acknowledge the response.
+
+        if self.socket is not None:  # This means that we do not have a connection with the client.
+            self.send_response(ResponseCode.TRANSACTION_COMMITTED if self.previous_state == CoordinatorStates.COMMIT
+                               else ResponseCode.TRANSACTION_ABORTED)
+            time.sleep(1)  # Wait for client to acknowledge the response.
+
         self.protocol_db.close()
         self.close()
 
@@ -218,6 +221,7 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
                 self.active_map[endpoint_index] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 try:
                     self.active_map[endpoint_index].connect((endpoint['hostname'], endpoint['port'],))
+                    self.protocol_db.add_participant(str(self.transaction_id), endpoint_index)
                     logger.info(f"Adding new participant to transaction: {endpoint['hostname']}")
                 except socket.error:
                     logger.error(f"Unable to attach the participant {endpoint['hostname']}.")
@@ -243,14 +247,28 @@ class TransactionCoordinatorThread(threading.Thread, communication.GenericSocket
         participants_to_remove = []  # Avoid in-place deletion while iterating.
 
         for participant, participant_socket in self.active_map.items():
+            try:
+                participant_socket.settimeout(self.context['failure_time'])
+            except OSError as e:
+                logger.warning(f"Could not set socket timeout. {e}")
+                continue
+
             logger.info(f"Sending {op_code} to participant {participant}.")
             self.send_message(op_code, [str(self.transaction_id)], participant_socket)  # Swallow the error.
 
+            # Break symmetry of the coordinator asking for acknowledgement while the participant asks for the status.
             participant_response = self.read_message(participant_socket)
+            if participant_response is not None and participant_response[0] == OpCode.TRANSACTION_STATUS:
+                logger.info(f"Participant {participant} is requesting the status of the transaction.")
+                logger.info(f"Resending {op_code} to participant {participant}.")
+                self.send_message(op_code, [str(self.transaction_id)], participant_socket)  # Swallow the error.
+                participant_response = self.read_message(participant_socket)
+
             if participant_response is not None and participant_response[0] == ResponseCode.ACKNOWLEDGE_END:
                 logger.info(f"Participant {participant} has acknowledged {op_code}.")
                 logger.info(f"Removing participant {participant} from active site map.")
                 participants_to_remove.append(participant)
+
             else:
                 logger.warning(f"Participant {participant} has not acknowledged {op_code}.")
 

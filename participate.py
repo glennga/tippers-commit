@@ -50,9 +50,15 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
         self.state = ParticipantStates.INITIALIZE
         self.socket_token = queue.Queue(1)
         self.previous_edge_property = None
+        self.is_prepared = False
 
     def _send_edge(self, content) -> Any:
-        self.socket.settimeout(self.context['failure_time'])
+        try:  # If we are unable to set the timeout, then the socket is closed.
+            self.socket.settimeout(self.context['failure_time'])
+        except OSError as e:
+            self.previous_edge_property = content
+            logger.warning(f"Could not set socket timeout. {e}")
+            return None if type(content) == OpCode else False
 
         if type(content) == OpCode:
             if not self.send_op(content):
@@ -112,9 +118,10 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
                 logger.info("RM has approved of PREPARE. Sending PREPARED back, and moving to PREPARE state.")
                 self.send_response(ResponseCode.PREPARED_FROM_PARTICIPANT)  # Ignore error here!
                 self.state = ParticipantStates.PREPARED
+                self.is_prepared = True
 
             except Exception as e:
-                logger.warning("RM could not PREPARE. Sending ABORT back, and moving to ABORT. Exception message: ", e)
+                logger.warning(f"RM could not PREPARE. Sending ABORT back, and moving to ABORT. {e}")
                 self.send_response(ResponseCode.ABORT_FROM_PARTICIPANT)  # Ignore error here!
                 self.state = ParticipantStates.ABORT
 
@@ -142,12 +149,14 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
             logger.warning(f'Unknown operation received. Ignoring. {client_message}')
 
     def _abort_state(self):
-        logger.info("Sending ROLLBACK to RM.")
-        self.conn.tpc_rollback()
-        self.protocol_db.log_abort_of(str(self.transaction_id))
+        if self.is_prepared:  # We only rollback if we were prepared in the first place.
+            logger.info("Sending ROLLBACK to RM.")
+            self.conn.tpc_rollback()
+            self.protocol_db.log_abort_of(str(self.transaction_id))
 
         if not self._send_edge(ResponseCode.ACKNOWLEDGE_END):
             logger.warning("Unable to send acknowledgement to coordinator. Moving to WAITING.")
+            self.state = ParticipantStates.WAITING
 
         else:
             self.close()  # Release our resources.
@@ -161,7 +170,8 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
         self.protocol_db.log_commit_of(str(self.transaction_id))
 
         if not self._send_edge(ResponseCode.ACKNOWLEDGE_END):
-            return  # Coordinator did not acknowledge. Move to WAITING state.
+            logger.warning("Unable to send acknowledgement to coordinator. Moving to WAITING.")
+            self.state = ParticipantStates.WAITING
 
         else:
             self.close()  # Release our resources.
@@ -178,6 +188,7 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
         # Repeat the action which lead us to the WAITING state.
         coordinator_response = self._send_edge(self.previous_edge_property)
         if coordinator_response is None or not coordinator_response:
+            logger.warning(f"Unable to send the message {self.previous_edge_property}. Staying in WAITING state.")
             pass  # We have failed in the WAITING state. Looping back.
 
         elif type(self.previous_edge_property) == ResponseCode and coordinator_response:
@@ -210,11 +221,11 @@ class TransactionParticipantThread(threading.Thread, communication.GenericSocket
             return True
 
         except psycopg2.IntegrityError as e:
-            logger.info("Integrity error caught. Exiting now: ", e)
+            logger.info(f"Integrity error caught. Exiting now: {e}")
             return False
 
         except Exception as e:
-            logger.error("Unknown exception caught. Exiting now: ", e)
+            logger.error(f"Unknown exception caught. Exiting now: {e}")
             return False
 
     def inject_socket(self, client_socket: socket.socket):
